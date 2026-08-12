@@ -1,0 +1,60 @@
+name: Release (Windows installer)
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      companion_url:
+        description: "生产 companion 地址（覆盖仓库变量 WB_COMPANION_URL_PROD）"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build unsigned Windows installer
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+    env:
+      # 构建期注入的生产地址：优先 workflow 手动输入，其次仓库变量，最后占位默认
+      WB_COMPANION_URL_PROD: ${{ inputs.companion_url || vars.WB_COMPANION_URL_PROD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - name: Build + package (NSIS x64, unsigned)
+        run: npm run pack:win
+      - name: Compute SHA-256
+        shell: pwsh
+        run: |
+          Get-ChildItem release/*.exe | ForEach-Object {
+            $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
+            "$($_.Name)  SHA256=$h" | Tee-Object -FilePath release/SHA256SUMS.txt -Append
+          }
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: |
+            desktop/release/*.exe
+            desktop/release/SHA256SUMS.txt
+          if-no-files-found: error
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            desktop/release/*.exe
+            desktop/release/SHA256SUMS.txt
+          body: |
+            未签名内测安装包。安装时 Windows SmartScreen 可能提示，请核对 SHA256SUMS.txt 后选择"仍要运行"。
+            正式推广前需接入代码签名。

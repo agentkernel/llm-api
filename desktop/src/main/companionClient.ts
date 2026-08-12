@@ -2,10 +2,16 @@ import { app } from "electron";
 import { getDeviceToken } from "./secureStore";
 
 /**
- * 业务服务地址：生产构建使用固定地址（发布前替换），开发模式允许
- * WB_COMPANION_URL 环境变量覆盖。员工在界面上无法查看或修改。
+ * 业务服务地址：
+ * - 生产地址在构建期由 electron.vite.config.ts 通过 define 注入 __WB_COMPANION_URL__，
+ *   取自打包环境变量 WB_COMPANION_URL_PROD（发布流水线设置），无需改源码。
+ * - 开发模式（未打包）允许 WB_COMPANION_URL 环境变量覆盖。
+ * 员工在界面上无法查看或修改该地址。
  */
-const PRODUCTION_COMPANION_URL = "https://assistant.ziyouxie.online";
+declare const __WB_COMPANION_URL__: string;
+
+const PRODUCTION_COMPANION_URL =
+  typeof __WB_COMPANION_URL__ === "string" ? __WB_COMPANION_URL__ : "https://assistant.ziyouxie.online";
 
 export function companionBaseUrl(): string {
   if (!app.isPackaged && process.env.WB_COMPANION_URL) {

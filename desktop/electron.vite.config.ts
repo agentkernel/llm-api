@@ -8,6 +8,12 @@ export default defineConfig({
     resolve: {
       alias: { "@shared": resolve(__dirname, "src/shared") },
     },
+    define: {
+      // 构建期注入生产业务服务地址；发布流水线通过 WB_COMPANION_URL_PROD 提供。
+      __WB_COMPANION_URL__: JSON.stringify(
+        process.env.WB_COMPANION_URL_PROD ?? "https://assistant.ziyouxie.online",
+      ),
+    },
   },
   preload: {
     plugins: [externalizeDepsPlugin()],

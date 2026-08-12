@@ -1,6 +1,10 @@
 # WorkBuddy 模型配置助手
 
+[![CI](https://github.com/agentkernel/llm-api/actions/workflows/ci.yml/badge.svg)](https://github.com/agentkernel/llm-api/actions/workflows/ci.yml)
+
 公司内部桌面工具：员工用兑换码/购买激活设备 → 自动生成 WorkBuddy `models.json` → 查看积分与用量。
+
+完整文档见 [docs/README.md](docs/README.md)（架构、本地开发、部署、运维、端到端测试、排障）。发布流程见 [.github/workflows/release.yml](.github/workflows/release.yml)：给提交打 `v*` 标签即自动产出未签名 Windows 安装包与 SHA-256 校验并挂到 Release。
 
 ## 仓库结构
 
