@@ -1,17 +1,18 @@
-/* WorkBuddy 视觉 token（依据实机浅色/深色截图提取） */
+/* WorkBuddy 5.3.8 Foundation token（依据安装包 app.asar 与实机截图校准） */
 
 :root {
   --font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC",
     "Helvetica Neue", Arial, sans-serif;
 
-  --radius-lg: 10px;
+  --radius-lg: 16px;
   --radius-md: 8px;
-  --radius-sm: 6px;
+  --radius-sm: 8px;
 
-  --accent: #00b380;
-  --accent-hover: #00a276;
-  --accent-soft: rgba(0, 179, 128, 0.12);
+  --accent: #00c29a;
+  --accent-hover: #40d1b3;
+  --accent-active: #009273;
+  --accent-soft: rgba(0, 194, 154, 0.12);
   --danger: #e5484d;
   --danger-soft: rgba(229, 72, 77, 0.12);
   --warning: #d9a514;
@@ -20,33 +21,39 @@
 }
 
 [data-theme="light"] {
-  --bg: #f7f7f5;
-  --bg-sidebar: #f1f1ef;
+  --bg: #fafafa;
+  --bg-sidebar: #f2f2f2;
   --bg-card: #ffffff;
   --bg-input: #ffffff;
-  --bg-hover: rgba(0, 0, 0, 0.045);
-  --bg-active: rgba(0, 0, 0, 0.07);
-  --border: rgba(0, 0, 0, 0.09);
+  --bg-hover: #ebebeb;
+  --bg-active: #e6e6e6;
+  --border: rgba(0, 0, 0, 0.08);
   --border-strong: rgba(0, 0, 0, 0.16);
-  --text: #212120;
-  --text-secondary: #6f6f6d;
-  --text-tertiary: #9b9b99;
-  --overlay: rgba(0, 0, 0, 0.4);
+  --text: rgba(0, 0, 0, 0.9);
+  --text-secondary: rgba(0, 0, 0, 0.65);
+  --text-tertiary: rgba(0, 0, 0, 0.45);
+  --overlay: rgba(0, 0, 0, 0.45);
+  --primary-bg: rgba(0, 0, 0, 0.9);
+  --primary-hover: rgba(0, 0, 0, 0.74);
+  --primary-text: #ffffff;
 }
 
 [data-theme="dark"] {
-  --bg: #141416;
-  --bg-sidebar: #17171a;
-  --bg-card: #1f1f23;
-  --bg-input: #242428;
-  --bg-hover: rgba(255, 255, 255, 0.055);
-  --bg-active: rgba(255, 255, 255, 0.09);
+  --bg: #141414;
+  --bg-sidebar: #1f1f1f;
+  --bg-card: #242424;
+  --bg-input: #292929;
+  --bg-hover: #2f2f2f;
+  --bg-active: #333333;
   --border: rgba(255, 255, 255, 0.08);
   --border-strong: rgba(255, 255, 255, 0.16);
-  --text: #ececea;
-  --text-secondary: #a3a3a1;
-  --text-tertiary: #71716f;
-  --overlay: rgba(0, 0, 0, 0.55);
+  --text: rgba(255, 255, 255, 0.9);
+  --text-secondary: rgba(255, 255, 255, 0.65);
+  --text-tertiary: rgba(255, 255, 255, 0.45);
+  --overlay: rgba(0, 0, 0, 0.6);
+  --primary-bg: rgba(255, 255, 255, 0.9);
+  --primary-hover: rgba(255, 255, 255, 0.74);
+  --primary-text: rgba(0, 0, 0, 0.9);
 }
 
 * {
@@ -63,8 +70,8 @@ body,
 
 body {
   font-family: var(--font-family);
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 14px;
+  line-height: 1.5;
   color: var(--text);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
@@ -172,7 +179,7 @@ select {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 16px;
+  padding: 16px 20px;
 }
 
 .card + .card {
@@ -221,7 +228,8 @@ select {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 7px 14px;
+  height: 32px;
+  padding: 0 14px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-strong);
   background: var(--bg-card);
@@ -242,14 +250,14 @@ select {
 }
 
 .btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #ffffff;
+  background: var(--primary-bg);
+  border-color: transparent;
+  color: var(--primary-text);
   font-weight: 500;
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: var(--primary-hover);
 }
 
 .btn-danger {
@@ -270,7 +278,8 @@ select {
 
 .input {
   width: 100%;
-  padding: 8px 12px;
+  height: 32px;
+  padding: 0 12px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-strong);
   background: var(--bg-input);
@@ -284,7 +293,8 @@ select {
 }
 
 .select {
-  padding: 7px 10px;
+  height: 32px;
+  padding: 0 10px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-strong);
   background: var(--bg-input);
@@ -388,8 +398,8 @@ select {
   max-width: calc(100vw - 48px);
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 20px;
+  border-radius: var(--radius-lg);
+  padding: 24px;
   box-shadow: none;
 }
 
