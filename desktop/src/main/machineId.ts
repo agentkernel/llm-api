@@ -8,6 +8,9 @@ const execFileAsync = promisify(execFile);
  * 上送前由服务端做加盐 HMAC，本地不落盘）。
  */
 export async function readMachineId(): Promise<string> {
+  // 测试覆盖（仅 main 进程读取，不暴露给 renderer；生产不设置）。
+  const override = process.env.WB_MACHINE_ID;
+  if (override && override.trim()) return override.trim();
   if (process.platform === "win32") {
     const { stdout } = await execFileAsync("reg", [
       "query",

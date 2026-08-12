@@ -42,6 +42,15 @@
 列备份 → 恢复备份往返（6 模型）→ 网关连通测试（74ms）。产物：`.local/smoke-result.json`。
 逻辑见 `desktop/src/main/smoke.ts`。
 
+### 桌面端真实窗口渲染（`WB_SHOT` 截图）
+
+用真实 Electron 窗口加载 renderer（走真实 preload IPC + 在线 companion），确认 UI 实际渲染、无白屏/运行时错误、WorkBuddy 风格绿色主色：
+
+- 激活页：![activation](screenshots/activation.png)
+- 已激活主界面（当前积分/服务状态/快捷操作/配置文件路径/热加载提示）：![overview](screenshots/overview.png)
+
+> 截图为 dev 直跑（`electron out/main/index.js`）产物，版本号显示 Electron 版本；打包后显示 0.1.0。
+
 生成的样例配置：`.local/generated-models.json`（6 条，字段含 id/url(/v1)/apiKey，schema 合法）。
 
 ## 3. 自测中发现并修复的缺陷

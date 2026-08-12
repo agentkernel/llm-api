@@ -56,6 +56,27 @@ app.whenReady().then(async () => {
   registerIpcHandlers(() => mainWindow);
   createWindow();
 
+  // 截图模式：等 renderer 渲染完成后抓图退出，用于验证 UI 真实渲染（受 WB_SHOT 门控）。
+  if (process.env.WB_SHOT) {
+    const outPath = process.env.WB_SHOT;
+    const win = mainWindow!;
+    win.webContents.once("did-finish-load", () => {
+      setTimeout(async () => {
+        try {
+          const img = await win.webContents.capturePage();
+          const { writeFileSync } = await import("node:fs");
+          writeFileSync(outPath, img.toPNG());
+          console.log(`[shot] saved ${outPath}`);
+          app.exit(0);
+        } catch (error) {
+          console.error(`[shot] failed: ${(error as Error).message}`);
+          app.exit(1);
+        }
+      }, 2500);
+    });
+    return;
+  }
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
