@@ -23,6 +23,14 @@
 - **购买入账语义错误**：购买订单曾以 CNY 价格作为 Sub2API 订单 `amount`，而 Sub2API 入账额度 = `amount`，导致「¥99 买 100 积分」只到账 99。
   - 修复：下单 `amount` 改为套餐积分数；CLI 强制 `points == price_cny`（1 积分 = 1 元，fee=0）。
 
+### 持续集成 / 发布
+
+- 同步至 GitHub 仓库 `agentkernel/llm-api`（默认分支 main）。
+- CI（`.github/workflows/ci.yml`）：companion / desktop / sub2api-patch 三 job，全绿。
+- 发布（`.github/workflows/release.yml`）：打 `v*` 标签自动出未签名 Windows 安装包 + SHA-256 并挂 Release；`v0.1.0` 已验证产出 `WorkBuddy.Setup.0.1.0.exe`。
+- 修复 `.gitignore` 根目录级 `sub2api/`、`data/` 未锚定导致误忽略 `companion/src/sub2api/` 业务客户端（Linux CI 全新检出报模块缺失）。
+- 桌面端生产地址改由构建期 `WB_COMPANION_URL_PROD` 注入，发布无需改源码。
+
 ### 本地自测基础设施（tools/）
 
 - `miniredis-server`：进程内 Redis 兼容服务。

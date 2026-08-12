@@ -43,6 +43,16 @@
 1. **BIGINT 作为字符串**：pg 把 BIGINT 外键（分组 id、user_id）读成字符串，导致分组比较失败、`fulfill` 时 `user_id` 类型不符（Sub2API 期望 int64）。已在 CLI、domain 层、服务间客户端统一转数字，并新增 `normalizeDeviceRow` 单测锁定。
 2. **购买入账语义**：购买订单原以 CNY 价格作为 Sub2API 订单 amount，而 Sub2API 入账额度=amount，导致买「100 积分」只到账 99。已改为下单 amount=套餐积分数，并在 CLI 强制 `points==price_cny`（1 积分=1 元）。
 
+## 3b. 持续集成 / 发布（GitHub Actions，仓库 agentkernel/llm-api）
+
+- CI（`.github/workflows/ci.yml`）在 push/PR 触发，三 job 全绿：
+  - companion：`npm ci` + typecheck + vitest + build（ubuntu）
+  - desktop：typecheck + vitest + electron-vite build（ubuntu）
+  - sub2api-patch：克隆官方 v0.1.175 → `git apply` 本仓库补丁 → `go build` + `go vet` + `TestWB` 测试（ubuntu）。**独立证明补丁在全新 Linux 环境可干净应用并通过。**
+- 发布（`.github/workflows/release.yml`）：打 `v*` 标签在 windows-latest 打包未签名 NSIS 安装包、计算 SHA-256、挂到 GitHub Release。
+- 已验证：`v0.1.0` Release 自动产出 `WorkBuddy.Setup.0.1.0.exe` 与 `SHA256SUMS.txt`。
+- 生产地址由构建期 `WB_COMPANION_URL_PROD`（仓库变量或发布输入）注入，发布无需改源码。
+
 ## 4. 发布前待办（生产环境相关，本机无法覆盖）
 
 1. 用真实微信/支付宝（或 EasyPay）商户跑一遍真实支付回调（本机用签名假回调验证了状态机与入账逻辑）。
