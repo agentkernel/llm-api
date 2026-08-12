@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  companion:
+    name: companion (Fastify)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: companion
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: companion/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: Build
+        run: npm run build
+
+  desktop:
+    name: desktop (Electron)
+    runs-on: ubuntu-latest
+    env:
+      # 跳过 Electron 二进制下载：单测通过 vi.mock 模拟 electron，构建不需要运行时二进制
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - name: Typecheck (main + renderer)
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: Build (electron-vite)
+        run: npm run build
+
+  sub2api-patch:
+    name: sub2api workbuddy-patch (Go)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+      - name: Checkout Sub2API v0.1.175 and apply patch
+        run: |
+          git clone --depth 1 --branch v0.1.175 https://github.com/Wei-Shaw/sub2api.git sub2api-src
+          cd sub2api-src
+          git switch -c workbuddy-patch
+          git apply --check "$GITHUB_WORKSPACE/sub2api-patch/workbuddy-patch.diff"
+          git apply "$GITHUB_WORKSPACE/sub2api-patch/workbuddy-patch.diff"
+      - name: Build
+        working-directory: sub2api-src/backend
+        run: go build ./...
+      - name: Vet (unit tag)
+        working-directory: sub2api-src/backend
+        run: go vet -tags unit ./internal/service/
+      - name: WorkBuddy patch tests
+        working-directory: sub2api-src/backend
+        run: go test -tags unit -run "TestWB|TestBuildPaymentOrderProviderSnapshotTagsWB" ./internal/service/ -count=1

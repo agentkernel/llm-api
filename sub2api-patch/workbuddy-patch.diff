@@ -1,0 +1,1072 @@
+diff --git a/backend/internal/handler/wb_service_payment_handler.go b/backend/internal/handler/wb_service_payment_handler.go
+new file mode 100644
+index 0000000..06fe5bb
+--- /dev/null
++++ b/backend/internal/handler/wb_service_payment_handler.go
+@@ -0,0 +1,103 @@
++package handler
++
++// WorkBuddy patch: service-to-service payment endpoints used by the WorkBuddy
++// companion service. Registered under /api/v1/service/payment and guarded by
++// the x-service-key middleware (see middleware/wb_service_auth.go). The
++// desktop client never talks to these endpoints directly.
++
++import (
++	"strings"
++
++	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
++	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
++	"github.com/Wei-Shaw/sub2api/internal/service"
++
++	"github.com/gin-gonic/gin"
++)
++
++// WBServicePaymentHandler exposes deferred-order operations to the companion.
++type WBServicePaymentHandler struct {
++	paymentService *service.PaymentService
++}
++
++// NewWBServicePaymentHandler reuses the payment service already wired into the
++// user-facing PaymentHandler, so no dependency-injection changes are needed.
++func NewWBServicePaymentHandler(base *PaymentHandler) *WBServicePaymentHandler {
++	if base == nil {
++		return nil
++	}
++	return &WBServicePaymentHandler{paymentService: base.paymentService}
++}
++
++type wbCreateOrderRequest struct {
++	UserID        int64   `json:"user_id" binding:"required"`
++	Amount        float64 `json:"amount" binding:"required"`
++	PaymentType   string  `json:"payment_type" binding:"required"`
++	DeviceBinding string  `json:"device_binding"`
++	ClientIP      string  `json:"client_ip"`
++}
++
++// CreateOrder creates a deferred balance order and returns the provider
++// payload (qr_code / pay_url) for the desktop client to render.
++// POST /api/v1/service/payment/orders
++func (h *WBServicePaymentHandler) CreateOrder(c *gin.Context) {
++	var req wbCreateOrderRequest
++	if err := c.ShouldBindJSON(&req); err != nil {
++		response.BadRequest(c, "invalid request: "+err.Error())
++		return
++	}
++	clientIP := strings.TrimSpace(req.ClientIP)
++	if clientIP == "" {
++		clientIP = c.ClientIP()
++	}
++	resp, err := h.paymentService.WBCreateDeferredOrder(c.Request.Context(), service.WBCreateDeferredOrderRequest{
++		UserID:        req.UserID,
++		Amount:        req.Amount,
++		PaymentType:   req.PaymentType,
++		DeviceBinding: req.DeviceBinding,
++		ClientIP:      clientIP,
++		SrcHost:       c.Request.Host,
++	})
++	if err != nil {
++		response.ErrorFrom(c, err)
++		return
++	}
++	response.Success(c, resp)
++}
++
++// GetOrder returns the minimal deferred-order state for polling.
++// GET /api/v1/service/payment/orders/:out_trade_no
++func (h *WBServicePaymentHandler) GetOrder(c *gin.Context) {
++	status, err := h.paymentService.WBGetDeferredOrder(c.Request.Context(), c.Param("out_trade_no"))
++	if err != nil {
++		response.ErrorFrom(c, err)
++		return
++	}
++	response.Success(c, status)
++}
++
++type wbFulfillRequest struct {
++	UserID        int64  `json:"user_id" binding:"required"`
++	DeviceBinding string `json:"device_binding"`
++}
++
++// Fulfill redeems a parked order to the given user. Requires an
++// Idempotency-Key header; the operation itself is idempotent per user.
++// POST /api/v1/service/payment/orders/:out_trade_no/fulfill
++func (h *WBServicePaymentHandler) Fulfill(c *gin.Context) {
++	if strings.TrimSpace(c.GetHeader("Idempotency-Key")) == "" {
++		response.ErrorFrom(c, infraerrors.BadRequest("IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key header is required"))
++		return
++	}
++	var req wbFulfillRequest
++	if err := c.ShouldBindJSON(&req); err != nil {
++		response.BadRequest(c, "invalid request: "+err.Error())
++		return
++	}
++	status, err := h.paymentService.WBFulfillDeferredOrder(c.Request.Context(), c.Param("out_trade_no"), req.UserID, req.DeviceBinding)
++	if err != nil {
++		response.ErrorFrom(c, err)
++		return
++	}
++	response.Success(c, status)
++}
+diff --git a/backend/internal/payment/types.go b/backend/internal/payment/types.go
+index 6421c4a..b23a0f9 100644
+--- a/backend/internal/payment/types.go
++++ b/backend/internal/payment/types.go
+@@ -24,6 +24,10 @@ const (
+ const (
+ 	OrderStatusPending           = "PENDING"
+ 	OrderStatusPaid              = "PAID"
++	// OrderStatusPaidPendingRedeem is a WorkBuddy patch state: the order is
++	// paid but fulfillment is deferred until the companion service confirms
++	// the redeem target user (see service/payment_wb_deferred.go).
++	OrderStatusPaidPendingRedeem = "PAID_PENDING_REDEEM"
+ 	OrderStatusRecharging        = "RECHARGING"
+ 	OrderStatusCompleted         = "COMPLETED"
+ 	OrderStatusExpired           = "EXPIRED"
+diff --git a/backend/internal/server/middleware/wb_service_auth.go b/backend/internal/server/middleware/wb_service_auth.go
+new file mode 100644
+index 0000000..a24abf7
+--- /dev/null
++++ b/backend/internal/server/middleware/wb_service_auth.go
+@@ -0,0 +1,27 @@
++package middleware
++
++// WorkBuddy patch: shared-secret auth for the companion service endpoints.
++// The key comes from the WB_SERVICE_API_KEY environment variable; when it is
++// empty the routes are not registered at all (see routes/wb_service.go), so
++// this middleware never sees an empty expected key in practice but still
++// rejects that case defensively.
++
++import (
++	"crypto/subtle"
++	"strings"
++
++	"github.com/gin-gonic/gin"
++)
++
++// WBServiceAuth validates the x-service-key header against the configured key.
++func WBServiceAuth(serviceKey string) gin.HandlerFunc {
++	expected := []byte(strings.TrimSpace(serviceKey))
++	return func(c *gin.Context) {
++		provided := []byte(strings.TrimSpace(c.GetHeader("x-service-key")))
++		if len(expected) == 0 || subtle.ConstantTimeCompare(expected, provided) != 1 {
++			AbortWithError(c, 401, "INVALID_SERVICE_KEY", "Invalid service key")
++			return
++		}
++		c.Next()
++	}
++}
+diff --git a/backend/internal/server/router.go b/backend/internal/server/router.go
+index c7ac774..4d2d5e2 100644
+--- a/backend/internal/server/router.go
++++ b/backend/internal/server/router.go
+@@ -3,6 +3,7 @@ package server
+ import (
+ 	"context"
+ 	"log"
++	"os"
+ 	"sync/atomic"
+ 	"time"
+ 
+@@ -130,6 +131,8 @@ func registerRoutes(
+ 	routes.RegisterAdminRoutes(v1, h, adminAuth, auditLog, stepUpAuth, settingService, panelRateLimiter)
+ 	routes.RegisterGatewayRoutes(r, h, apiKeyAuth, apiKeyService, subscriptionService, opsService, settingService, compositeResolver, cfg)
+ 	routes.RegisterPaymentRoutes(v1, h.Payment, h.PaymentWebhook, h.Admin.Payment, jwtAuth, adminAuth, auditLog, settingService, panelRateLimiter)
++	// WorkBuddy patch: companion service endpoints (no-op unless key is set).
++	routes.RegisterWBServiceRoutes(v1, handler.NewWBServicePaymentHandler(h.Payment), os.Getenv("WB_SERVICE_API_KEY"))
+ 
+ 	handler.RegisterPageRoutes(v1, cfg.Pricing.DataDir, gin.HandlerFunc(jwtAuth), gin.HandlerFunc(adminAuth), settingService)
+ }
+diff --git a/backend/internal/server/routes/wb_service.go b/backend/internal/server/routes/wb_service.go
+new file mode 100644
+index 0000000..e7bbd43
+--- /dev/null
++++ b/backend/internal/server/routes/wb_service.go
+@@ -0,0 +1,31 @@
++package routes
++
++// WorkBuddy patch: service-to-service routes for the companion service.
++// The whole group is skipped unless a service key is configured, so a stock
++// deployment is completely unaffected.
++
++import (
++	"strings"
++
++	"github.com/Wei-Shaw/sub2api/internal/handler"
++	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
++
++	"github.com/gin-gonic/gin"
++)
++
++// RegisterWBServiceRoutes registers /api/v1/service/payment endpoints.
++func RegisterWBServiceRoutes(v1 *gin.RouterGroup, wbHandler *handler.WBServicePaymentHandler, serviceKey string) {
++	if wbHandler == nil || strings.TrimSpace(serviceKey) == "" {
++		return
++	}
++	group := v1.Group("/service/payment")
++	group.Use(middleware.WBServiceAuth(serviceKey))
++	{
++		orders := group.Group("/orders")
++		{
++			orders.POST("", wbHandler.CreateOrder)
++			orders.GET("/:out_trade_no", wbHandler.GetOrder)
++			orders.POST("/:out_trade_no/fulfill", wbHandler.Fulfill)
++		}
++	}
++}
+diff --git a/backend/internal/service/payment_fulfillment.go b/backend/internal/service/payment_fulfillment.go
+index 4d442f3..9afd5f8 100644
+--- a/backend/internal/service/payment_fulfillment.go
++++ b/backend/internal/service/payment_fulfillment.go
+@@ -194,6 +194,9 @@ func (s *PaymentService) alreadyProcessed(ctx context.Context, o *dbent.PaymentO
+ 	switch cur.Status {
+ 	case OrderStatusCompleted, OrderStatusRefunded:
+ 		return nil
++	// WorkBuddy patch: a parked deferred order needs no further webhook work.
++	case OrderStatusPaidPendingRedeem:
++		return nil
+ 	case OrderStatusFailed, OrderStatusPaid, OrderStatusRecharging:
+ 		return s.executeFulfillment(ctx, o.ID)
+ 	case OrderStatusExpired:
+@@ -218,6 +221,10 @@ func (s *PaymentService) executeFulfillment(ctx context.Context, oid int64) erro
+ 	if err != nil {
+ 		return fmt.Errorf("get order: %w", err)
+ 	}
++	// WorkBuddy patch: deferred balance orders are parked instead of credited.
++	if o.OrderType == payment.OrderTypeBalance && isWBDeferredOrder(o) {
++		return s.executeWBDeferredHold(ctx, o)
++	}
+ 	if o.OrderType == payment.OrderTypeSubscription {
+ 		return s.ExecuteSubscriptionFulfillment(ctx, oid)
+ 	}
+diff --git a/backend/internal/service/payment_order.go b/backend/internal/service/payment_order.go
+index da7178d..9c2fc55 100644
+--- a/backend/internal/service/payment_order.go
++++ b/backend/internal/service/payment_order.go
+@@ -306,6 +306,16 @@ func buildPaymentOrderProviderSnapshot(sel *payment.InstanceSelection, req Creat
+ 		snapshot["currency"] = paymentProviderConfigCurrency(providerKey, sel.Config)
+ 	}
+ 
++	// WorkBuddy patch: tag deferred-fulfillment orders at creation time so the
++	// flag is persisted before any webhook can arrive.
++	if req.WBDeferred {
++		snapshot[wbSnapshotDeferredKey] = true
++		if binding := strings.TrimSpace(req.WBDeviceBinding); binding != "" {
++			snapshot[wbSnapshotDeviceKey] = binding
++		}
++		return snapshot
++	}
++
+ 	if len(snapshot) == 1 {
+ 		return nil
+ 	}
+@@ -327,7 +337,7 @@ func (s *PaymentService) checkDailyLimit(ctx context.Context, tx *dbent.Tx, user
+ 		return nil
+ 	}
+ 	ts := psStartOfDayUTC(time.Now())
+-	orders, err := tx.PaymentOrder.Query().Where(paymentorder.UserIDEQ(userID), paymentorder.StatusIn(OrderStatusPaid, OrderStatusRecharging, OrderStatusCompleted), paymentorder.PaidAtGTE(ts)).All(ctx)
++	orders, err := tx.PaymentOrder.Query().Where(paymentorder.UserIDEQ(userID), paymentorder.StatusIn(OrderStatusPaid, OrderStatusRecharging, OrderStatusCompleted, OrderStatusPaidPendingRedeem), paymentorder.PaidAtGTE(ts)).All(ctx)
+ 	if err != nil {
+ 		return fmt.Errorf("query daily usage: %w", err)
+ 	}
+diff --git a/backend/internal/service/payment_service.go b/backend/internal/service/payment_service.go
+index 792a842..be77f39 100644
+--- a/backend/internal/service/payment_service.go
++++ b/backend/internal/service/payment_service.go
+@@ -23,6 +23,7 @@ import (
+ const (
+ 	OrderStatusPending           = payment.OrderStatusPending
+ 	OrderStatusPaid              = payment.OrderStatusPaid
++	OrderStatusPaidPendingRedeem = payment.OrderStatusPaidPendingRedeem
+ 	OrderStatusRecharging        = payment.OrderStatusRecharging
+ 	OrderStatusCompleted         = payment.OrderStatusCompleted
+ 	OrderStatusExpired           = payment.OrderStatusExpired
+@@ -85,6 +86,12 @@ type CreateOrderRequest struct {
+ 	OrderType       string
+ 	PlanID          int64
+ 	Locale          string
++
++	// WorkBuddy patch: when WBDeferred is set the order snapshot is tagged so
++	// fulfillment parks the paid order in PAID_PENDING_REDEEM instead of
++	// crediting the order user (see payment_wb_deferred.go).
++	WBDeferred      bool
++	WBDeviceBinding string
+ }
+ 
+ type CreateOrderResponse struct {
+diff --git a/backend/internal/service/payment_stats.go b/backend/internal/service/payment_stats.go
+index 9dc48e0..b0a69d3 100644
+--- a/backend/internal/service/payment_stats.go
++++ b/backend/internal/service/payment_stats.go
+@@ -24,7 +24,7 @@ func (s *PaymentService) GetDashboardStats(ctx context.Context, days int) (*Dash
+ 	since := now.AddDate(0, 0, -days)
+ 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+ 
+-	paidStatuses := []string{OrderStatusCompleted, OrderStatusPaid, OrderStatusRecharging}
++	paidStatuses := []string{OrderStatusCompleted, OrderStatusPaid, OrderStatusRecharging, OrderStatusPaidPendingRedeem}
+ 
+ 	orders, err := s.entClient.PaymentOrder.Query().
+ 		Where(
+diff --git a/backend/internal/service/payment_wb_deferred.go b/backend/internal/service/payment_wb_deferred.go
+new file mode 100644
+index 0000000..b7bbc8a
+--- /dev/null
++++ b/backend/internal/service/payment_wb_deferred.go
+@@ -0,0 +1,376 @@
++package service
++
++// WorkBuddy patch: deferred balance fulfillment.
++//
++// Orders created through the WorkBuddy service API carry wb_deferred=true in
++// their provider snapshot. For those orders the webhook-driven fulfillment
++// stops right after the recharge redeem code has been created: the order is
++// parked in PAID_PENDING_REDEEM and no balance is credited to the order user
++// (an escrow account owned by the companion service). The companion service
++// later calls WBFulfillDeferredOrder with the real device user, which redeems
++// the held code to that user and completes the order.
++//
++// Everything WorkBuddy-specific lives in this file plus small, clearly marked
++// insertions in payment_fulfillment.go / payment_order.go / payment_service.go
++// so upstream rebases stay cheap.
++
++import (
++	"context"
++	"fmt"
++	"strings"
++	"time"
++
++	dbent "github.com/Wei-Shaw/sub2api/ent"
++	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
++	"github.com/Wei-Shaw/sub2api/internal/payment"
++	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
++)
++
++const (
++	wbSnapshotDeferredKey = "wb_deferred"
++	wbSnapshotDeviceKey   = "wb_device"
++
++	wbAuditHeld      = "WB_HELD_PENDING_REDEEM"
++	wbAuditFulfilled = "WB_FULFILLED"
++	wbAuditOperator  = "wb-service"
++)
++
++func isWBDeferredOrder(o *dbent.PaymentOrder) bool {
++	if o == nil || len(o.ProviderSnapshot) == 0 {
++		return false
++	}
++	v, ok := o.ProviderSnapshot[wbSnapshotDeferredKey]
++	if !ok {
++		return false
++	}
++	switch typed := v.(type) {
++	case bool:
++		return typed
++	case string:
++		return strings.EqualFold(strings.TrimSpace(typed), "true")
++	default:
++		return false
++	}
++}
++
++func wbOrderDeviceBinding(o *dbent.PaymentOrder) string {
++	if o == nil || len(o.ProviderSnapshot) == 0 {
++		return ""
++	}
++	return psSnapshotStringValue(o.ProviderSnapshot[wbSnapshotDeviceKey])
++}
++
++// WBCreateDeferredOrderRequest is a service-to-service order creation request.
++type WBCreateDeferredOrderRequest struct {
++	UserID        int64
++	Amount        float64
++	PaymentType   string
++	DeviceBinding string
++	ClientIP      string
++	SrcHost       string
++}
++
++// WBCreateDeferredOrder creates a balance order whose fulfillment is deferred.
++// The order is attributed to req.UserID (the companion escrow user); that user
++// never receives the balance because fulfillment is intercepted.
++func (s *PaymentService) WBCreateDeferredOrder(ctx context.Context, req WBCreateDeferredOrderRequest) (*CreateOrderResponse, error) {
++	if req.UserID <= 0 {
++		return nil, infraerrors.BadRequest("INVALID_INPUT", "user_id is required")
++	}
++	resp, err := s.CreateOrder(ctx, CreateOrderRequest{
++		UserID:          req.UserID,
++		Amount:          req.Amount,
++		PaymentType:     req.PaymentType,
++		ClientIP:        req.ClientIP,
++		SrcHost:         req.SrcHost,
++		OrderType:       payment.OrderTypeBalance,
++		WBDeferred:      true,
++		WBDeviceBinding: req.DeviceBinding,
++	})
++	if err != nil {
++		return nil, err
++	}
++	// Belt and suspenders: make sure the deferred flag actually landed in the
++	// snapshot before the QR code is handed out (nobody can pay earlier, so
++	// fixing it here is race-free).
++	if resp.OrderID > 0 {
++		if err := s.wbEnsureDeferredFlag(ctx, resp.OrderID, req.DeviceBinding); err != nil {
++			return nil, err
++		}
++	}
++	return resp, nil
++}
++
++func (s *PaymentService) wbEnsureDeferredFlag(ctx context.Context, orderID int64, deviceBinding string) error {
++	o, err := s.entClient.PaymentOrder.Get(ctx, orderID)
++	if err != nil {
++		return fmt.Errorf("reload deferred order: %w", err)
++	}
++	if isWBDeferredOrder(o) {
++		return nil
++	}
++	snapshot := o.ProviderSnapshot
++	if snapshot == nil {
++		snapshot = map[string]any{}
++	}
++	snapshot[wbSnapshotDeferredKey] = true
++	if binding := strings.TrimSpace(deviceBinding); binding != "" {
++		snapshot[wbSnapshotDeviceKey] = binding
++	}
++	if _, err := s.entClient.PaymentOrder.UpdateOneID(o.ID).SetProviderSnapshot(snapshot).Save(ctx); err != nil {
++		return fmt.Errorf("persist deferred flag: %w", err)
++	}
++	return nil
++}
++
++// executeWBDeferredHold parks a paid deferred order in PAID_PENDING_REDEEM.
++// It ensures the recharge redeem code exists (idempotently) but does NOT
++// redeem it. Called from executeFulfillment for wb_deferred balance orders.
++func (s *PaymentService) executeWBDeferredHold(ctx context.Context, o *dbent.PaymentOrder) error {
++	switch {
++	case o == nil:
++		return infraerrors.BadRequest("INVALID_STATUS", "nil payment order")
++	case o.Status == OrderStatusPaidPendingRedeem || o.Status == OrderStatusCompleted:
++		return nil
++	case psIsRefundStatus(o.Status):
++		return infraerrors.BadRequest("INVALID_STATUS", "refund-related order cannot hold")
++	case o.Status != OrderStatusPaid && o.Status != OrderStatusFailed && o.Status != OrderStatusRecharging:
++		return infraerrors.BadRequest("INVALID_STATUS", "order cannot hold in status "+o.Status)
++	}
++	lease, err := s.acquirePaymentFulfillmentLease(ctx, o)
++	if err != nil {
++		return err
++	}
++	if lease == nil {
++		return nil
++	}
++
++	existing, lookupErr := s.redeemService.GetByCode(ctx, o.RechargeCode)
++	switch resolveRedeemAction(existing, lookupErr) {
++	case redeemActionSkipCompleted:
++		// The code was already redeemed (a concurrent fulfill won) — finish.
++		return s.markCompleted(ctx, o, lease, "RECHARGE_SUCCESS")
++	case redeemActionCreate:
++		rc := &RedeemCode{Code: o.RechargeCode, Type: RedeemTypeBalance, Value: o.Amount, Status: StatusUnused}
++		if err := s.redeemService.CreateCode(ctx, rc); err != nil {
++			s.markFailed(ctx, o.ID, lease, err)
++			return fmt.Errorf("create held redeem code: %w", err)
++		}
++	case redeemActionRedeem:
++		// Code exists and is unused — nothing to create.
++	}
++
++	updated, err := s.entClient.PaymentOrder.Update().Where(
++		paymentorder.IDEQ(o.ID),
++		paymentorder.StatusEQ(OrderStatusRecharging),
++		paymentorder.UpdatedAtEQ(lease.version),
++	).SetStatus(OrderStatusPaidPendingRedeem).Save(ctx)
++	if err != nil {
++		return fmt.Errorf("park order pending redeem: %w", err)
++	}
++	if updated == 0 {
++		current, getErr := s.entClient.PaymentOrder.Get(ctx, o.ID)
++		if getErr == nil && (current.Status == OrderStatusPaidPendingRedeem || current.Status == OrderStatusCompleted) {
++			return nil
++		}
++		return infraerrors.Conflict("CONFLICT", "fulfillment lease was lost before hold")
++	}
++	if !s.hasAuditLog(ctx, o.ID, wbAuditHeld) {
++		s.writeAuditLog(ctx, o.ID, wbAuditHeld, wbAuditOperator, map[string]any{
++			"rechargeCode":  o.RechargeCode,
++			"amount":        o.Amount,
++			"deviceBinding": wbOrderDeviceBinding(o),
++		})
++	}
++	return nil
++}
++
++// WBOrderStatus is the minimal service-to-service view of a deferred order.
++type WBOrderStatus struct {
++	OrderID          int64      `json:"order_id"`
++	OutTradeNo       string     `json:"out_trade_no"`
++	Status           string     `json:"status"`
++	Amount           float64    `json:"amount"`
++	PayAmount        float64    `json:"pay_amount"`
++	DeviceBinding    string     `json:"device_binding,omitempty"`
++	RedeemedToUserID int64      `json:"redeemed_to_user_id,omitempty"`
++	ExpiresAt        time.Time  `json:"expires_at"`
++	PaidAt           *time.Time `json:"paid_at,omitempty"`
++	CompletedAt      *time.Time `json:"completed_at,omitempty"`
++}
++
++// WBGetDeferredOrder returns the state of a deferred order by out_trade_no.
++func (s *PaymentService) WBGetDeferredOrder(ctx context.Context, outTradeNo string) (*WBOrderStatus, error) {
++	o, err := s.wbLoadDeferredOrder(ctx, outTradeNo)
++	if err != nil {
++		return nil, err
++	}
++	return s.wbOrderStatus(ctx, o), nil
++}
++
++func (s *PaymentService) wbLoadDeferredOrder(ctx context.Context, outTradeNo string) (*dbent.PaymentOrder, error) {
++	outTradeNo = strings.TrimSpace(outTradeNo)
++	if outTradeNo == "" {
++		return nil, infraerrors.BadRequest("INVALID_INPUT", "out_trade_no is required")
++	}
++	o, err := s.entClient.PaymentOrder.Query().Where(paymentorder.OutTradeNo(outTradeNo)).Only(ctx)
++	if err != nil {
++		if dbent.IsNotFound(err) {
++			return nil, infraerrors.NotFound("NOT_FOUND", "order not found")
++		}
++		return nil, fmt.Errorf("lookup order: %w", err)
++	}
++	if !isWBDeferredOrder(o) {
++		return nil, infraerrors.BadRequest("NOT_DEFERRED", "order is not a deferred order")
++	}
++	return o, nil
++}
++
++func (s *PaymentService) wbOrderStatus(ctx context.Context, o *dbent.PaymentOrder) *WBOrderStatus {
++	status := &WBOrderStatus{
++		OrderID:       o.ID,
++		OutTradeNo:    o.OutTradeNo,
++		Status:        o.Status,
++		Amount:        o.Amount,
++		PayAmount:     o.PayAmount,
++		DeviceBinding: wbOrderDeviceBinding(o),
++		ExpiresAt:     o.ExpiresAt,
++		PaidAt:        o.PaidAt,
++		CompletedAt:   o.CompletedAt,
++	}
++	if o.Status == OrderStatusCompleted {
++		if rc, err := s.redeemService.GetByCode(ctx, o.RechargeCode); err == nil && rc != nil && rc.UsedBy != nil {
++			status.RedeemedToUserID = *rc.UsedBy
++		}
++	}
++	return status
++}
++
++// WBFulfillDeferredOrder redeems a parked order's held code to userID and
++// completes the order. Idempotent: repeating the call for the same user
++// returns the completed state; a different user gets 409.
++func (s *PaymentService) WBFulfillDeferredOrder(ctx context.Context, outTradeNo string, userID int64, deviceBinding string) (*WBOrderStatus, error) {
++	if userID <= 0 {
++		return nil, infraerrors.BadRequest("INVALID_INPUT", "user_id is required")
++	}
++	o, err := s.wbLoadDeferredOrder(ctx, outTradeNo)
++	if err != nil {
++		return nil, err
++	}
++	if expected := wbOrderDeviceBinding(o); expected != "" && !strings.EqualFold(expected, strings.TrimSpace(deviceBinding)) {
++		return nil, infraerrors.Conflict("DEVICE_MISMATCH", "order is bound to another device")
++	}
++
++	switch {
++	case o.Status == OrderStatusCompleted:
++		return s.wbCompletedResult(ctx, o, userID)
++	case psIsRefundStatus(o.Status):
++		return nil, infraerrors.BadRequest("INVALID_STATUS", "refund-related order cannot fulfill")
++	case o.Status == OrderStatusPending || o.Status == OrderStatusExpired || o.Status == OrderStatusCancelled:
++		return nil, infraerrors.BadRequest("NOT_PAID", "order is not paid yet")
++	case o.Status == OrderStatusPaid || o.Status == OrderStatusRecharging:
++		// Webhook processing in flight; the caller should retry shortly.
++		return nil, infraerrors.Conflict("PROCESSING", "order is being processed, retry later")
++	case o.Status != OrderStatusPaidPendingRedeem && o.Status != OrderStatusFailed:
++		return nil, infraerrors.BadRequest("INVALID_STATUS", "order cannot fulfill in status "+o.Status)
++	}
++
++	lease, err := s.acquireWBFulfillLease(ctx, o)
++	if err != nil {
++		return nil, err
++	}
++	if lease == nil {
++		return s.wbCompletedResult(ctx, o, userID)
++	}
++
++	// Guard against a held code that was somehow already consumed.
++	if rc, lookupErr := s.redeemService.GetByCode(ctx, o.RechargeCode); lookupErr == nil && rc != nil && rc.IsUsed() {
++		if rc.UsedBy == nil || *rc.UsedBy != userID {
++			s.markFailed(ctx, o.ID, lease, fmt.Errorf("held code already redeemed by another user"))
++			return nil, infraerrors.Conflict("ALREADY_REDEEMED", "order was already redeemed by another user")
++		}
++		if err := s.markCompleted(ctx, o, lease, "RECHARGE_SUCCESS"); err != nil {
++			return nil, err
++		}
++		return s.wbCompletedResult(ctx, o, userID)
++	}
++
++	if _, err := s.redeemService.Redeem(ContextSkipRedeemAffiliate(ctx), userID, o.RechargeCode); err != nil {
++		s.markFailed(ctx, o.ID, lease, err)
++		return nil, err
++	}
++	if !s.hasAuditLog(ctx, o.ID, wbAuditFulfilled) {
++		s.writeAuditLog(ctx, o.ID, wbAuditFulfilled, wbAuditOperator, map[string]any{
++			"redeemedTo":    userID,
++			"deviceBinding": strings.TrimSpace(deviceBinding),
++			"rechargeCode":  o.RechargeCode,
++			"amount":        o.Amount,
++		})
++	}
++	if err := s.markCompleted(ctx, o, lease, "RECHARGE_SUCCESS"); err != nil {
++		return nil, err
++	}
++	return s.wbCompletedResult(ctx, o, userID)
++}
++
++// wbCompletedResult returns the completed order state when the historical
++// redeem target matches userID, and a conflict otherwise.
++func (s *PaymentService) wbCompletedResult(ctx context.Context, o *dbent.PaymentOrder, userID int64) (*WBOrderStatus, error) {
++	current, err := s.entClient.PaymentOrder.Get(ctx, o.ID)
++	if err != nil {
++		return nil, fmt.Errorf("reload order: %w", err)
++	}
++	rc, err := s.redeemService.GetByCode(ctx, current.RechargeCode)
++	if err != nil || rc == nil || !rc.IsUsed() || rc.UsedBy == nil {
++		return nil, infraerrors.Conflict("CONFLICT", "order completion state is inconsistent, retry later")
++	}
++	if *rc.UsedBy != userID {
++		return nil, infraerrors.Conflict("ALREADY_REDEEMED", "order was already redeemed by another user")
++	}
++	return s.wbOrderStatus(ctx, current), nil
++}
++
++// acquireWBFulfillLease is the deferred-order variant of
++// acquirePaymentFulfillmentLease: it claims PAID_PENDING_REDEEM / FAILED
++// orders (or stale RECHARGING ones) by CAS-ing them into RECHARGING.
++func (s *PaymentService) acquireWBFulfillLease(ctx context.Context, o *dbent.PaymentOrder) (*paymentFulfillmentLease, error) {
++	now := time.Now().UTC().Truncate(time.Microsecond)
++	staleBefore := now.Add(-paymentFulfillmentLeaseDuration)
++	updated, err := s.entClient.PaymentOrder.Update().
++		Where(
++			paymentorder.IDEQ(o.ID),
++			paymentorder.Or(
++				paymentorder.StatusIn(OrderStatusPaidPendingRedeem, OrderStatusFailed),
++				paymentorder.And(
++					paymentorder.StatusEQ(OrderStatusRecharging),
++					paymentorder.UpdatedAtLTE(staleBefore),
++				),
++			),
++		).
++		SetStatus(OrderStatusRecharging).
++		SetUpdatedAt(now).
++		ClearFailedAt().
++		ClearFailedReason().
++		Save(ctx)
++	if err != nil {
++		return nil, fmt.Errorf("acquire wb fulfill lease: %w", err)
++	}
++	if updated == 0 {
++		current, getErr := s.entClient.PaymentOrder.Get(ctx, o.ID)
++		if getErr != nil {
++			return nil, fmt.Errorf("reload wb fulfill lease: %w", getErr)
++		}
++		if current.Status == OrderStatusCompleted {
++			return nil, nil
++		}
++		return nil, infraerrors.Conflict("CONFLICT", "order is being processed, retry later")
++	}
++	claimed, err := s.entClient.PaymentOrder.Get(ctx, o.ID)
++	if err != nil {
++		return nil, fmt.Errorf("reload acquired wb fulfill lease: %w", err)
++	}
++	if claimed.Status != OrderStatusRecharging {
++		return nil, infraerrors.Conflict("CONFLICT", "wb fulfill lease was lost")
++	}
++	return &paymentFulfillmentLease{version: claimed.UpdatedAt}, nil
++}
+diff --git a/backend/internal/service/payment_wb_deferred_test.go b/backend/internal/service/payment_wb_deferred_test.go
+new file mode 100644
+index 0000000..1669303
+--- /dev/null
++++ b/backend/internal/service/payment_wb_deferred_test.go
+@@ -0,0 +1,376 @@
++//go:build unit
++
++package service
++
++// WorkBuddy patch tests: deferred balance fulfillment state machine.
++
++import (
++	"context"
++	"database/sql"
++	"fmt"
++	"sync"
++	"testing"
++	"time"
++
++	dbent "github.com/Wei-Shaw/sub2api/ent"
++	"github.com/Wei-Shaw/sub2api/ent/enttest"
++	"github.com/Wei-Shaw/sub2api/internal/payment"
++	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
++	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
++	"github.com/stretchr/testify/require"
++
++	"entgo.io/ent/dialect"
++	entsql "entgo.io/ent/dialect/sql"
++	_ "modernc.org/sqlite"
++)
++
++// --- stubs ---
++
++type wbDeferredUserRepo struct {
++	*mockUserRepo
++	mu       sync.Mutex
++	users    map[int64]*User
++	balances map[int64]float64
++	credits  []int64
++}
++
++func (r *wbDeferredUserRepo) GetByID(_ context.Context, id int64) (*User, error) {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	u, ok := r.users[id]
++	if !ok {
++		return nil, fmt.Errorf("user %d not found", id)
++	}
++	cloned := *u
++	return &cloned, nil
++}
++
++func (r *wbDeferredUserRepo) UpdateBalance(_ context.Context, id int64, amount float64) error {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	r.balances[id] += amount
++	r.credits = append(r.credits, id)
++	return nil
++}
++
++type wbDeferredRedeemRepo struct {
++	mu          sync.Mutex
++	nextID      int64
++	codesByCode map[string]*RedeemCode
++}
++
++func newWBDeferredRedeemRepo() *wbDeferredRedeemRepo {
++	return &wbDeferredRedeemRepo{codesByCode: map[string]*RedeemCode{}}
++}
++
++func (r *wbDeferredRedeemRepo) Create(_ context.Context, code *RedeemCode) error {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	r.nextID++
++	code.ID = r.nextID
++	cloned := *code
++	r.codesByCode[code.Code] = &cloned
++	return nil
++}
++
++func (r *wbDeferredRedeemRepo) CreateBatch(context.Context, []RedeemCode) error {
++	panic("unexpected call")
++}
++
++func (r *wbDeferredRedeemRepo) GetByID(_ context.Context, id int64) (*RedeemCode, error) {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	for _, code := range r.codesByCode {
++		if code.ID == id {
++			cloned := *code
++			return &cloned, nil
++		}
++	}
++	return nil, ErrRedeemCodeNotFound
++}
++
++func (r *wbDeferredRedeemRepo) GetByCode(_ context.Context, code string) (*RedeemCode, error) {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	redeemCode, ok := r.codesByCode[code]
++	if !ok {
++		return nil, ErrRedeemCodeNotFound
++	}
++	cloned := *redeemCode
++	return &cloned, nil
++}
++
++func (r *wbDeferredRedeemRepo) Update(context.Context, *RedeemCode) error {
++	panic("unexpected call")
++}
++
++func (r *wbDeferredRedeemRepo) BatchUpdate(context.Context, []int64, RedeemCodeBatchUpdateFields) (int64, error) {
++	panic("unexpected call")
++}
++
++func (r *wbDeferredRedeemRepo) Delete(context.Context, int64) error {
++	panic("unexpected call")
++}
++
++func (r *wbDeferredRedeemRepo) Use(_ context.Context, id, userID int64) error {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	for _, code := range r.codesByCode {
++		if code.ID != id {
++			continue
++		}
++		if code.Status != StatusUnused {
++			return ErrRedeemCodeUsed
++		}
++		now := time.Now().UTC()
++		code.Status = StatusUsed
++		code.UsedBy = &userID
++		code.UsedAt = &now
++		return nil
++	}
++	return ErrRedeemCodeNotFound
++}
++
++func (r *wbDeferredRedeemRepo) List(context.Context, pagination.PaginationParams) ([]RedeemCode, *pagination.PaginationResult, error) {
++	panic("unexpected call")
++}
++
++func (r *wbDeferredRedeemRepo) ListWithFilters(context.Context, pagination.PaginationParams, string, string, string) ([]RedeemCode, *pagination.PaginationResult, error) {
++	panic("unexpected call")
++}
++
++func (r *wbDeferredRedeemRepo) ListByUser(context.Context, int64, int) ([]RedeemCode, error) {
++	panic("unexpected call")
++}
++
++func (r *wbDeferredRedeemRepo) ListByUserPaginated(context.Context, int64, pagination.PaginationParams, string) ([]RedeemCode, *pagination.PaginationResult, error) {
++	panic("unexpected call")
++}
++
++func (r *wbDeferredRedeemRepo) SumPositiveBalanceByUser(context.Context, int64) (float64, error) {
++	panic("unexpected call")
++}
++
++// --- fixture ---
++
++type wbDeferredFixture struct {
++	client     *dbent.Client
++	svc        *PaymentService
++	userRepo   *wbDeferredUserRepo
++	redeemRepo *wbDeferredRedeemRepo
++	escrow     *dbent.User
++	device     *dbent.User
++	order      *dbent.PaymentOrder
++}
++
++func newWBDeferredFixture(t *testing.T, name string) *wbDeferredFixture {
++	t.Helper()
++	ctx := context.Background()
++
++	db, err := sql.Open("sqlite", "file:"+name+"?mode=memory&cache=shared&_fk=1")
++	require.NoError(t, err)
++	t.Cleanup(func() { _ = db.Close() })
++	_, err = db.Exec("PRAGMA foreign_keys = ON")
++	require.NoError(t, err)
++	drv := entsql.OpenDB(dialect.SQLite, db)
++	client := enttest.NewClient(t, enttest.WithOptions(dbent.Driver(drv)))
++	t.Cleanup(func() { _ = client.Close() })
++
++	escrow, err := client.User.Create().
++		SetEmail(name + "-escrow@wb.internal").
++		SetPasswordHash("hash").
++		SetUsername(name + "-escrow").
++		Save(ctx)
++	require.NoError(t, err)
++	device, err := client.User.Create().
++		SetEmail(name + "-device@wb.internal").
++		SetPasswordHash("hash").
++		SetUsername(name + "-device").
++		Save(ctx)
++	require.NoError(t, err)
++
++	order, err := client.PaymentOrder.Create().
++		SetUserID(escrow.ID).
++		SetUserEmail(escrow.Email).
++		SetUserName(escrow.Username).
++		SetAmount(100).
++		SetPayAmount(100).
++		SetFeeRate(0).
++		SetRechargeCode("PAY-" + name).
++		SetOutTradeNo("sub2_wb_" + name).
++		SetPaymentType(payment.TypeAlipay).
++		SetPaymentTradeNo("").
++		SetOrderType(payment.OrderTypeBalance).
++		SetStatus(OrderStatusPending).
++		SetExpiresAt(time.Now().Add(time.Hour)).
++		SetClientIP("127.0.0.1").
++		SetSrcHost("api.example.com").
++		SetProviderSnapshot(map[string]any{
++			wbSnapshotDeferredKey: true,
++			wbSnapshotDeviceKey:   "device-hmac-1",
++		}).
++		Save(ctx)
++	require.NoError(t, err)
++
++	userRepo := &wbDeferredUserRepo{
++		mockUserRepo: &mockUserRepo{},
++		users: map[int64]*User{
++			escrow.ID: {ID: escrow.ID, Email: escrow.Email, Username: escrow.Username},
++			device.ID: {ID: device.ID, Email: device.Email, Username: device.Username},
++		},
++		balances: map[int64]float64{},
++	}
++	redeemRepo := newWBDeferredRedeemRepo()
++	redeemService := NewRedeemService(redeemRepo, userRepo, nil, nil, nil, client, nil, nil)
++
++	svc := &PaymentService{
++		entClient:       client,
++		registry:        payment.NewRegistry(),
++		redeemService:   redeemService,
++		userRepo:        userRepo,
++		providersLoaded: true,
++	}
++
++	return &wbDeferredFixture{
++		client:     client,
++		svc:        svc,
++		userRepo:   userRepo,
++		redeemRepo: redeemRepo,
++		escrow:     escrow,
++		device:     device,
++		order:      order,
++	}
++}
++
++func (f *wbDeferredFixture) payAndHold(t *testing.T) {
++	t.Helper()
++	require.NoError(t, f.svc.toPaid(context.Background(), f.order, "upstream-trade-wb", f.order.PayAmount, payment.TypeAlipay))
++}
++
++func (f *wbDeferredFixture) reloadOrder(t *testing.T) *dbent.PaymentOrder {
++	t.Helper()
++	o, err := f.client.PaymentOrder.Get(context.Background(), f.order.ID)
++	require.NoError(t, err)
++	return o
++}
++
++// --- tests ---
++
++func TestWBDeferredHoldParksOrderWithoutCrediting(t *testing.T) {
++	f := newWBDeferredFixture(t, "wb_hold")
++	f.payAndHold(t)
++
++	reloaded := f.reloadOrder(t)
++	require.Equal(t, OrderStatusPaidPendingRedeem, reloaded.Status)
++	require.NotNil(t, reloaded.PaidAt)
++	require.Nil(t, reloaded.CompletedAt)
++
++	code, err := f.redeemRepo.GetByCode(context.Background(), f.order.RechargeCode)
++	require.NoError(t, err)
++	require.Equal(t, StatusUnused, code.Status)
++	require.Equal(t, f.order.Amount, code.Value)
++
++	require.Empty(t, f.userRepo.credits, "no balance may be credited while parked")
++}
++
++func TestWBDeferredDuplicateWebhookKeepsHold(t *testing.T) {
++	f := newWBDeferredFixture(t, "wb_dup")
++	f.payAndHold(t)
++
++	// Duplicate webhook delivery: CAS to PAID fails, alreadyProcessed path.
++	require.NoError(t, f.svc.toPaid(context.Background(), f.reloadOrder(t), "upstream-trade-wb", f.order.PayAmount, payment.TypeAlipay))
++
++	reloaded := f.reloadOrder(t)
++	require.Equal(t, OrderStatusPaidPendingRedeem, reloaded.Status)
++	require.Empty(t, f.userRepo.credits)
++}
++
++func TestWBFulfillRedeemsToDeviceUserIdempotently(t *testing.T) {
++	f := newWBDeferredFixture(t, "wb_fulfill")
++	f.payAndHold(t)
++	ctx := context.Background()
++
++	status, err := f.svc.WBFulfillDeferredOrder(ctx, f.order.OutTradeNo, f.device.ID, "device-hmac-1")
++	require.NoError(t, err)
++	require.Equal(t, OrderStatusCompleted, status.Status)
++	require.Equal(t, f.device.ID, status.RedeemedToUserID)
++
++	require.Equal(t, []int64{f.device.ID}, f.userRepo.credits)
++	require.Equal(t, f.order.Amount, f.userRepo.balances[f.device.ID])
++	require.Zero(t, f.userRepo.balances[f.escrow.ID], "escrow user must never be credited")
++
++	// Repeat with the same user: idempotent, no double credit.
++	again, err := f.svc.WBFulfillDeferredOrder(ctx, f.order.OutTradeNo, f.device.ID, "device-hmac-1")
++	require.NoError(t, err)
++	require.Equal(t, OrderStatusCompleted, again.Status)
++	require.Equal(t, []int64{f.device.ID}, f.userRepo.credits)
++
++	// A different user must get a conflict.
++	_, err = f.svc.WBFulfillDeferredOrder(ctx, f.order.OutTradeNo, f.escrow.ID, "device-hmac-1")
++	require.Error(t, err)
++	require.True(t, infraerrors.IsConflict(err))
++}
++
++func TestWBFulfillRejectsDeviceMismatch(t *testing.T) {
++	f := newWBDeferredFixture(t, "wb_mismatch")
++	f.payAndHold(t)
++
++	_, err := f.svc.WBFulfillDeferredOrder(context.Background(), f.order.OutTradeNo, f.device.ID, "other-device")
++	require.Error(t, err)
++	require.True(t, infraerrors.IsConflict(err))
++	require.Equal(t, "DEVICE_MISMATCH", infraerrors.Reason(err))
++
++	reloaded := f.reloadOrder(t)
++	require.Equal(t, OrderStatusPaidPendingRedeem, reloaded.Status)
++	require.Empty(t, f.userRepo.credits)
++}
++
++func TestWBFulfillRejectsUnpaidOrder(t *testing.T) {
++	f := newWBDeferredFixture(t, "wb_unpaid")
++
++	_, err := f.svc.WBFulfillDeferredOrder(context.Background(), f.order.OutTradeNo, f.device.ID, "device-hmac-1")
++	require.Error(t, err)
++	require.True(t, infraerrors.IsBadRequest(err))
++	require.Equal(t, "NOT_PAID", infraerrors.Reason(err))
++}
++
++func TestWBFulfillRejectsNonDeferredOrder(t *testing.T) {
++	f := newWBDeferredFixture(t, "wb_nondeferred")
++	ctx := context.Background()
++
++	plain, err := f.client.PaymentOrder.Create().
++		SetUserID(f.escrow.ID).
++		SetUserEmail(f.escrow.Email).
++		SetUserName(f.escrow.Username).
++		SetAmount(50).
++		SetPayAmount(50).
++		SetFeeRate(0).
++		SetRechargeCode("PAY-plain").
++		SetOutTradeNo("sub2_wb_plain").
++		SetPaymentType(payment.TypeAlipay).
++		SetPaymentTradeNo("").
++		SetOrderType(payment.OrderTypeBalance).
++		SetStatus(OrderStatusPending).
++		SetExpiresAt(time.Now().Add(time.Hour)).
++		SetClientIP("127.0.0.1").
++		SetSrcHost("api.example.com").
++		Save(ctx)
++	require.NoError(t, err)
++
++	_, err = f.svc.WBFulfillDeferredOrder(ctx, plain.OutTradeNo, f.device.ID, "")
++	require.Error(t, err)
++	require.True(t, infraerrors.IsBadRequest(err))
++	require.Equal(t, "NOT_DEFERRED", infraerrors.Reason(err))
++}
++
++func TestBuildPaymentOrderProviderSnapshotTagsWBDeferred(t *testing.T) {
++	sel := &payment.InstanceSelection{InstanceID: "7", ProviderKey: payment.TypeAlipay, Config: map[string]string{"appId": "app-1"}}
++	snapshot := buildPaymentOrderProviderSnapshot(sel, CreateOrderRequest{WBDeferred: true, WBDeviceBinding: "device-hmac-9"})
++	require.NotNil(t, snapshot)
++	require.Equal(t, true, snapshot[wbSnapshotDeferredKey])
++	require.Equal(t, "device-hmac-9", snapshot[wbSnapshotDeviceKey])
++	require.Equal(t, "7", snapshot["provider_instance_id"])
++
++	plain := buildPaymentOrderProviderSnapshot(sel, CreateOrderRequest{})
++	require.NotContains(t, plain, wbSnapshotDeferredKey)
++}

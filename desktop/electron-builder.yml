@@ -1,0 +1,19 @@
+appId: internal.workbuddy.model-assistant
+productName: WorkBuddy 模型配置助手
+directories:
+  output: release
+files:
+  - out/**
+  - package.json
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  # 内测版不签名；正式发布前配置代码签名
+  signAndEditExecutable: false
+nsis:
+  oneClick: true
+  perMachine: false
+  deleteAppDataOnUninstall: false
+electronLanguages: [zh-CN, en-US]
+npmRebuild: false

@@ -1,0 +1,21 @@
+node_modules/
+dist/
+out/
+release/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+# Sub2API fork is a nested git repo managed on its own branch
+sub2api/
+# 本地自测运行时数据与密钥（含 pgdata、admin key、状态文件），禁止提交
+.local/
+# Sub2API 运行时生成的定价缓存
+data/
+# 本地自测工具的编译产物
+tools/miniredis-server/miniredis-server.exe
+tools/**/go.sum
+# local tooling
+.DS_Store
+Thumbs.db
