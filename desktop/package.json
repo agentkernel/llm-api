@@ -12,6 +12,7 @@
     "typecheck:web": "tsc -p tsconfig.web.json --noEmit",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "test": "vitest run",
+    "smoke": "electron out/main/index.js",
     "pack:win": "electron-vite build && electron-builder --win --x64 --config electron-builder.yml"
   },
   "dependencies": {

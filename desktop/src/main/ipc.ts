@@ -2,11 +2,13 @@ import { app, ipcMain, nativeTheme, type BrowserWindow } from "electron";
 import { toDataURL } from "qrcode";
 import type {
   AppState,
+  ApplyResult,
   ModelOption,
   ModelsFetchResult,
   PointsSummary,
   PurchaseCreated,
   RedeemResult,
+  TestResult,
   ThemeMode,
 } from "@shared/types";
 import { IPC } from "@shared/types";
@@ -64,7 +66,7 @@ interface FetchSession {
 
 let session: FetchSession | null = null;
 
-async function ensureRegistered(): Promise<void> {
+export async function ensureRegistered(): Promise<void> {
   if (getDeviceToken() && getDeviceUuid()) return;
   const machineId = await readMachineId();
   const result = await companionRequest<{
@@ -79,7 +81,7 @@ async function ensureRegistered(): Promise<void> {
   saveDeviceIdentity(result.deviceUuid, result.deviceToken);
 }
 
-async function assembleState(): Promise<AppState> {
+export async function assembleState(): Promise<AppState> {
   const configSnapshot = snapshotConfig();
   const base: AppState = {
     deviceUuid: getDeviceUuid(),
@@ -152,6 +154,79 @@ function toModelEntry(
   return entry;
 }
 
+export async function redeemCore(code: string): Promise<RedeemResult> {
+  await ensureRegistered();
+  return companionRequest<RedeemResult>("/api/client/redeem", {
+    method: "POST",
+    body: { code },
+  });
+}
+
+export async function fetchModelsCore(): Promise<ModelsFetchResult> {
+  await ensureRegistered();
+  const [catalogResp, material] = await Promise.all([
+    companionRequest<{ gatewayUrl: string; models: CatalogModel[] }>("/api/client/catalog"),
+    companionRequest<{ gatewayUrl: string; apiKey: string }>("/api/client/config-material"),
+  ]);
+  const gatewayIds = await fetchGatewayModelIds(material.gatewayUrl, material.apiKey);
+  const availableIds = new Set(gatewayIds);
+  const catalogIds = new Set(catalogResp.models.map((model) => model.modelId));
+  const visible = catalogResp.models.filter((model) => availableIds.has(model.modelId));
+  const hiddenCount = gatewayIds.filter((id) => !catalogIds.has(id)).length;
+
+  session = {
+    material,
+    catalog: visible,
+    availableIds,
+    configSnapshot: snapshotConfig(),
+  };
+
+  const models: ModelOption[] = visible.map((model) => ({
+    modelId: model.modelId,
+    displayName: model.displayName,
+    vendor: model.vendor,
+    maxInputTokens: model.maxInputTokens,
+    maxOutputTokens: model.maxOutputTokens,
+    supportsToolCall: model.supportsToolCall,
+    supportsImages: model.supportsImages,
+    supportsReasoning: model.supportsReasoning,
+    available: true,
+    reasoning: model.reasoning,
+  }));
+  return {
+    models,
+    gatewayTotal: gatewayIds.length,
+    catalogTotal: catalogResp.models.length,
+    hiddenCount,
+  };
+}
+
+export async function applyModelsCore(selectedIds: string[]): Promise<ApplyResult> {
+  if (!session) {
+    throw new Error("请先刷新模型列表");
+  }
+  const chosen = session.catalog.filter((model) => selectedIds.includes(model.modelId));
+  if (chosen.length === 0) {
+    throw new Error("请至少选择一个模型");
+  }
+  const entries = chosen.map((model) => toModelEntry(model, session!.material));
+  const result = applyConfig(entries, session.configSnapshot);
+  // 写入成功后刷新快照，避免下次误报外部修改
+  session.configSnapshot = snapshotConfig();
+  return {
+    written: entries.length,
+    backupId: result.backupId ?? "",
+    configPath: result.configPath,
+  };
+}
+
+export async function testModelCore(modelId: string): Promise<TestResult> {
+  if (!session) {
+    throw new Error("请先刷新模型列表");
+  }
+  return testChatCompletion(session.material.gatewayUrl, session.material.apiKey, modelId);
+}
+
 export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle(IPC.getState, () => assembleState());
 
@@ -160,13 +235,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     return assembleState();
   });
 
-  ipcMain.handle(IPC.redeem, async (_event, code: string): Promise<RedeemResult> => {
-    await ensureRegistered();
-    return companionRequest<RedeemResult>("/api/client/redeem", {
-      method: "POST",
-      body: { code },
-    });
-  });
+  ipcMain.handle(IPC.redeem, (_event, code: string): Promise<RedeemResult> => redeemCore(code));
 
   ipcMain.handle(IPC.listPackages, async () => {
     return companionRequest("/api/client/packages");
@@ -215,70 +284,11 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     return companionRequest<PointsSummary>(`/api/client/points/summary?days=${days}`);
   });
 
-  ipcMain.handle(IPC.fetchModels, async (): Promise<ModelsFetchResult> => {
-    await ensureRegistered();
-    const [catalogResp, material] = await Promise.all([
-      companionRequest<{ gatewayUrl: string; models: CatalogModel[] }>("/api/client/catalog"),
-      companionRequest<{ gatewayUrl: string; apiKey: string }>("/api/client/config-material"),
-    ]);
-    const gatewayIds = await fetchGatewayModelIds(material.gatewayUrl, material.apiKey);
-    const availableIds = new Set(gatewayIds);
-    const catalogIds = new Set(catalogResp.models.map((model) => model.modelId));
-    const visible = catalogResp.models.filter((model) => availableIds.has(model.modelId));
-    const hiddenCount = gatewayIds.filter((id) => !catalogIds.has(id)).length;
+  ipcMain.handle(IPC.fetchModels, (): Promise<ModelsFetchResult> => fetchModelsCore());
 
-    session = {
-      material,
-      catalog: visible,
-      availableIds,
-      configSnapshot: snapshotConfig(),
-    };
+  ipcMain.handle(IPC.applyModels, (_event, selectedIds: string[]) => applyModelsCore(selectedIds));
 
-    const models: ModelOption[] = visible.map((model) => ({
-      modelId: model.modelId,
-      displayName: model.displayName,
-      vendor: model.vendor,
-      maxInputTokens: model.maxInputTokens,
-      maxOutputTokens: model.maxOutputTokens,
-      supportsToolCall: model.supportsToolCall,
-      supportsImages: model.supportsImages,
-      supportsReasoning: model.supportsReasoning,
-      available: true,
-      reasoning: model.reasoning,
-    }));
-    return {
-      models,
-      gatewayTotal: gatewayIds.length,
-      catalogTotal: catalogResp.models.length,
-      hiddenCount,
-    };
-  });
-
-  ipcMain.handle(IPC.applyModels, async (_event, selectedIds: string[]) => {
-    if (!session) {
-      throw new Error("请先刷新模型列表");
-    }
-    const chosen = session.catalog.filter((model) => selectedIds.includes(model.modelId));
-    if (chosen.length === 0) {
-      throw new Error("请至少选择一个模型");
-    }
-    const entries = chosen.map((model) => toModelEntry(model, session!.material));
-    const result = applyConfig(entries, session.configSnapshot);
-    // 写入成功后刷新快照，避免下次误报外部修改
-    session.configSnapshot = snapshotConfig();
-    return {
-      written: entries.length,
-      backupId: result.backupId,
-      configPath: result.configPath,
-    };
-  });
-
-  ipcMain.handle(IPC.testModel, async (_event, modelId: string) => {
-    if (!session) {
-      throw new Error("请先刷新模型列表");
-    }
-    return testChatCompletion(session.material.gatewayUrl, session.material.apiKey, modelId);
-  });
+  ipcMain.handle(IPC.testModel, (_event, modelId: string) => testModelCore(modelId));
 
   ipcMain.handle(IPC.listBackups, () => listBackups());
 

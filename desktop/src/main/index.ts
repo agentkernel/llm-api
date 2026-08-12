@@ -43,7 +43,15 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // 真机冒烟测试模式：不建窗口，直接跑真实桌面栈并退出（受 WB_SMOKE 门控）。
+  if (process.env.WB_SMOKE === "1") {
+    const { runSmoke } = await import("./smoke");
+    const result = await runSmoke();
+    app.exit(result.ok ? 0 : 1);
+    return;
+  }
+
   nativeTheme.themeSource = getTheme();
   registerIpcHandlers(() => mainWindow);
   createWindow();

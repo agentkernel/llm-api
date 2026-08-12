@@ -31,6 +31,13 @@
 - 修复 `.gitignore` 根目录级 `sub2api/`、`data/` 未锚定导致误忽略 `companion/src/sub2api/` 业务客户端（Linux CI 全新检出报模块缺失）。
 - 桌面端生产地址改由构建期 `WB_COMPANION_URL_PROD` 注入，发布无需改源码。
 
+### 桌面端真机冒烟
+
+- 复检发现缺口：桌面端 Electron 主进程栈（机器码读取、DPAPI 令牌存储、companionClient、ipc 编排、真实写 models.json）此前只被 JS 镜像覆盖、未真机执行。
+- 补齐：`ipc.ts` 抽出可复用核心函数（`ensureRegistered/assembleState/redeemCore/fetchModelsCore/applyModelsCore/testModelCore`）；新增 `smoke.ts`（`WB_SMOKE=1` 门控），用真实模块对在线 companion 跑通「注册→兑换→拉模型→写配置→备份/恢复→连通测试」10 步全过。
+- `modelsFile.ts` 增加 `WB_MODELS_PATH` 测试覆盖，冒烟写临时文件，绝不触碰员工真实 `~/.workbuddy/models.json`。
+- 顺带修正 `applyModelsCore` 的 `ApplyResult.backupId` 类型（null → ""）。
+
 ### 本地自测基础设施（tools/）
 
 - `miniredis-server`：进程内 Redis 兼容服务。

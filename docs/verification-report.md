@@ -34,6 +34,14 @@
 
 `/v1/models` 返回全部 6 个模型；`/v1/chat/completions` 返回内容。
 
+### 桌面端真机冒烟（真实 Electron 主进程栈）：10/10 PASS
+
+用 `WB_SMOKE=1` 启动实际构建产物，执行**真实桌面 main 代码**（非镜像）对着在线 companion：
+读取系统机器码 → DPAPI 存储设备令牌并注册 → 兑换公司码（100 积分）→ `state.activated=true` →
+网关拉取 6 个模型 → schema 校验+加密备份+原子写入 models.json（临时路径）→ 二次写入触发备份 →
+列备份 → 恢复备份往返（6 模型）→ 网关连通测试（74ms）。产物：`.local/smoke-result.json`。
+逻辑见 `desktop/src/main/smoke.ts`。
+
 生成的样例配置：`.local/generated-models.json`（6 条，字段含 id/url(/v1)/apiKey，schema 合法）。
 
 ## 3. 自测中发现并修复的缺陷

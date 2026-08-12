@@ -42,6 +42,10 @@ const EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh", "max"]);
 const SUMMARIES = new Set(["auto", "always", "never"]);
 
 export function workbuddyConfigPath(): string {
+  // 测试/冒烟专用覆盖：避免误写员工真实的 ~/.workbuddy/models.json。
+  // 仅 main 进程读取，不暴露给 renderer；生产不设置该变量。
+  const override = process.env.WB_MODELS_PATH;
+  if (override && override.trim()) return override.trim();
   return join(homedir(), ".workbuddy", "models.json");
 }
 

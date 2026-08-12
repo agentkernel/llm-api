@@ -44,6 +44,23 @@ node "D:\workbuddy-model-assistant\tools\e2e\drive-edges.mjs"               # �
 
 期望输出末尾 `passed=32 failed=0` / `passed=8 failed=0`。
 
+## 桌面端真机冒烟（跑真实 Electron 主进程栈）
+
+`drive-companion.mjs` 用 JS 镜像了桌面逻辑；要验证**真实的桌面 main 进程代码**（机器码读取、DPAPI 令牌存储、companionClient、ipc 编排、真实写 models.json、备份/恢复、连通测试），用 `WB_SMOKE=1` 启动构建产物：
+
+```powershell
+cd D:\workbuddy-model-assistant\desktop
+npm run build
+$env:WB_SMOKE="1"
+$env:WB_COMPANION_URL="http://127.0.0.1:8720"
+$env:WB_MODELS_PATH="D:\workbuddy-model-assistant\.local\smoke-models.json"   # 临时路径，绝不碰真实配置
+$env:WB_SMOKE_CODE="<一枚未用的公司兑换码>"
+$env:WB_SMOKE_OUT="D:\workbuddy-model-assistant\.local\smoke-result.json"
+npm run smoke
+```
+
+期望每步 `PASS`、`overall: PASS`、退出码 0。冒烟逻辑见 `desktop/src/main/smoke.ts`，仅在 `WB_SMOKE=1` 时执行（不建窗口，跑完退出）。它依赖在线的 companion + Sub2API + 网关，因此不纳入 CI（CI 无这些服务），属本地真机验收项。
+
 ## 注意事项
 
 - `drive-companion.mjs` 每次用唯一机器码 → 全新设备，断言可重复；公司码是一次性的，`run-e2e-driver.ps1` 每次生成新码并经 `E2E_COMPANY_CODE` 注入。
