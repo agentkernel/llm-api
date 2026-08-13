@@ -75,8 +75,10 @@ async function main() {
   check("redeem idempotent (same device)", Number(redeemAgain.points) === 100);
 
   // 6. 目录 + 配置材料 + 网关模型（桌面端 fetchModels 逻辑）
+  // 环境可能额外适配真实模型（如 deepseek-*），只要求包含 6 个 e2e 基准模型，不要求恰好 6 个。
   const catalog = await companion("/api/client/catalog", { headers: auth() });
-  check("catalog has 6 models", (catalog.models ?? []).length === 6, `${(catalog.models ?? []).length}`);
+  const catalogModelIds = (catalog.models ?? []).map((m) => m.modelId);
+  check("catalog contains the 6 e2e models", ALL_MODELS.every((id) => catalogModelIds.includes(id)), catalogModelIds.join(","));
   check("catalog gatewayUrl ends with /v1", String(catalog.gatewayUrl).endsWith("/v1"));
 
   const material = await companion("/api/client/config-material", { headers: auth() });
@@ -94,7 +96,7 @@ async function main() {
   // 交集（目录 ∩ 网关）→ 生成 models.json 条目（桌面 applyModels 逻辑镜像）
   const catalogIds = new Set(catalog.models.map((m) => m.modelId));
   const intersection = gwIds.filter((id) => catalogIds.has(id));
-  check("intersection equals 6", intersection.length === 6, `${intersection.length}`);
+  check("intersection contains the 6 e2e models", ALL_MODELS.every((id) => intersection.includes(id)), intersection.join(","));
 
   const entries = catalog.models
     .filter((m) => intersection.includes(m.modelId))
@@ -116,7 +118,11 @@ async function main() {
     });
   const artifactPath = "D:/workbuddy-model-assistant/.local/generated-models.json";
   writeFileSync(artifactPath, JSON.stringify(entries, null, 2), "utf8");
-  check("generated models.json has 6 entries with id/url/apiKey", entries.length === 6 && entries.every((e) => e.id && e.url.endsWith("/v1") && e.apiKey));
+  check(
+    "generated models.json covers the 6 e2e models with id/url/apiKey",
+    ALL_MODELS.every((id) => entries.some((e) => e.id === id)) &&
+      entries.every((e) => e.id && e.url.endsWith("/v1") && e.apiKey),
+  );
   log(`wrote sample models.json artifact: ${artifactPath}`);
 
   // 7. 连通测试（桌面 testModel 逻辑）：真实打 /chat/completions
@@ -202,11 +208,20 @@ async function main() {
   const finalState = await companion("/api/client/state", { headers: auth() });
   check("points ~200 after purchase", Number(finalState.points) > 199.9 && Number(finalState.points) <= 200.001, JSON.stringify(finalState));
 
-  // 10. 积分统计页
+  // 10. 积分统计页（第 7 步连通测试已产生用量，按模型/按日统计必须非空 → 防解包回归）
   const points = await companion("/api/client/points/summary?days=30", { headers: auth() });
   check("points summary currentPoints ~200", Number(points.currentPoints) > 199.9, JSON.stringify(points).slice(0, 200));
   check("points summary totalRecharged == 200", Number(points.totalRecharged) === 200, `${points.totalRecharged}`);
-  check("points summary models is array", Array.isArray(points.models), typeof points.models);
+  check(
+    "points summary models non-empty after connectivity test",
+    Array.isArray(points.models) && points.models.length > 0,
+    JSON.stringify(points.models).slice(0, 200),
+  );
+  check(
+    "points summary daily non-empty after connectivity test",
+    Array.isArray(points.daily) && points.daily.length > 0,
+    JSON.stringify(points.daily).slice(0, 200),
+  );
 
   summary("drive-companion");
 }

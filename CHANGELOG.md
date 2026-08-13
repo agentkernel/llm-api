@@ -1,5 +1,13 @@
 # 变更记录
 
+## 未发布
+
+### 修复
+
+- **积分页按日/按模型统计恒为空**：companion `userUsageTrend`/`userUsageModels` 解包 Sub2API 仪表板响应时只处理「裸数组 / `{items:[...]}`」两种形态，而 Sub2API v0.1.175 实际把数据包在 panel envelope `data` 下的具名字段里（`data.trend` / `data.models`），解包得 `undefined` 后被 `?? []` 吞掉，导致 `/api/client/points/summary` 的 `daily`、`models` 恒为空数组（`currentPoints`/`periodUsage`/`periodRequests` 不受影响）。
+  - 修复：新增 `unwrapDashboardList` 按具名字段解包（兼容直接返回数组的形态），并补单元测试锁定 `data.trend`/`data.models` 形态防回归。
+  - e2e：主流程对 points summary 的断言由「是数组」加强为「连通测试之后 models/daily 非空」；目录相关断言放宽为「包含 6 个 e2e 基准模型」，以容忍验收环境额外适配的真实模型（如 `deepseek-*`）。
+
 ## v0.1.0（2026-08）
 
 首个内部可用版本。桌面端（Windows）+ companion 业务服务 + Sub2API 私有支付补丁。

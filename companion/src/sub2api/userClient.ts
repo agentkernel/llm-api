@@ -167,6 +167,18 @@ export async function userUsageStats(
   return userRequest(creds, `/api/v1/usage/stats${usageQueryString(query)}`);
 }
 
+/**
+ * Sub2API v0.1.175 的仪表板接口在 panel envelope 的 data 下还包了一层具名字段：
+ * /usage/dashboard/trend 返回 {trend:[...]}，/usage/dashboard/models 返回 {models:[...]}。
+ * 兼容直接返回数组的形态；其余形态视为空列表（与消费方 ?? [] 口径一致）。
+ */
+export function unwrapDashboardList<T>(data: unknown, field: "trend" | "models"): T[] {
+  if (Array.isArray(data)) return data as T[];
+  const value =
+    data && typeof data === "object" ? (data as Record<string, unknown>)[field] : undefined;
+  return Array.isArray(value) ? (value as T[]) : [];
+}
+
 export async function userUsageTrend(
   creds: HiddenUserCredentials,
   query: UsageQuery & { granularity?: "day" | "hour" },
@@ -176,20 +188,20 @@ export async function userUsageTrend(
   if (query.startDate) params.set("start_date", query.startDate);
   if (query.endDate) params.set("end_date", query.endDate);
   if (query.timezone) params.set("timezone", query.timezone);
-  const data = await userRequest<UsageTrendPoint[] | { items: UsageTrendPoint[] }>(
+  const data = await userRequest<unknown>(
     creds,
     `/api/v1/usage/dashboard/trend?${params.toString()}`,
   );
-  return Array.isArray(data) ? data : data.items;
+  return unwrapDashboardList<UsageTrendPoint>(data, "trend");
 }
 
 export async function userUsageModels(
   creds: HiddenUserCredentials,
   query: UsageQuery,
 ): Promise<UsageModelStat[]> {
-  const data = await userRequest<UsageModelStat[] | { items: UsageModelStat[] }>(
+  const data = await userRequest<unknown>(
     creds,
     `/api/v1/usage/dashboard/models${usageQueryString(query)}`,
   );
-  return Array.isArray(data) ? data : data.items;
+  return unwrapDashboardList<UsageModelStat>(data, "models");
 }
