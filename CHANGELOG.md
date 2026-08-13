@@ -4,7 +4,7 @@
 
 ### 修复
 
-- **高 DPI / 小分辨率下主窗口远大于屏幕且无法缩小**：主窗口写死 `1080x720`、最小 `920x600`（DIP)。屏幕逻辑工作区小于该值时（如 2880x1800 物理分辨率配 250%+ 缩放、或远程控制切换到低分辨率虚拟屏），窗口初始即超出屏幕，且最小尺寸限制导致手动也无法缩小回屏内。
+- **高 DPI / 小分辨率下主窗口远大于屏幕且无法缩小**：主窗口写死 `1080x720`、最小 `920x600`（DIP）。屏幕逻辑工作区小于该值时（如 2880x1800 物理分辨率配 250%+ 缩放、或远程控制切换到低分辨率虚拟屏），窗口初始即超出屏幕，且最小尺寸限制导致手动也无法缩小回屏内。
   - 修复：新增 `windowBounds.computeWindowBounds`，app ready 后取 `screen.getPrimaryDisplay().workAreaSize`，初始宽高与最小宽高一律取「默认值与工作区的较小者」，并显式 `center: true` 居中；任何分辨率/缩放下窗口完整落屏。补 5 条单元测试（大屏不变、200% 小屏全夹取、单轴溢出、当前主屏 1440x860 情形、退化工作区兜底）。
 - **DeepSeek 模型清单不对、在 WorkBuddy 中不可用**：服务端目录（`model_profiles`）此前导入的是 DeepSeek 已宣布退役的旧模型 id（`deepseek-chat`/`deepseek-reasoner`，官方公告 2026-07-24 起退役、现仅作兼容路由到 V4-Flash），且能力字段与现行模型不符（上下文 131072 vs 实际 1M、`deepseek-reasoner` 标注不支持工具调用导致 WorkBuddy 在 agent 会话中剥除 `tools`、缺 `reasoning` 配置导致思考档位交互异常）。官方 `GET /models` 实测现仅返回 `deepseek-v4-flash` 与 `deepseek-v4-pro`。
   - 数据/配置修复（不在代码库内，记录备查）：companion 目录经 CLI 重导入——新增 `deepseek-v4-flash`/`deepseek-v4-pro`（1M 上下文、384K 输出、支持工具调用与思维链、`reasoning: {defaultEffort: high, supportedEfforts: [high, xhigh], canDisableThinking: true}`，与官方文档及实测一致），旧 id 条目 `enabled=false` 下架；Sub2API 账号 2 `model_mapping` 增加 V4 恒等映射（保留旧别名做存量 models.json 的过渡兼容），分组 2 `models_list_config` 仅暴露 6 个基准模型 + 2 个 V4（旧 id 从网关 `/v1/models` 消失）。定价目录本就含 V4 条目，无需变更。
