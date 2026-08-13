@@ -4,6 +4,8 @@
 
 ### 修复
 
+- **高 DPI / 小分辨率下主窗口远大于屏幕且无法缩小**：主窗口写死 `1080x720`、最小 `920x600`（DIP)。屏幕逻辑工作区小于该值时（如 2880x1800 物理分辨率配 250%+ 缩放、或远程控制切换到低分辨率虚拟屏），窗口初始即超出屏幕，且最小尺寸限制导致手动也无法缩小回屏内。
+  - 修复：新增 `windowBounds.computeWindowBounds`，app ready 后取 `screen.getPrimaryDisplay().workAreaSize`，初始宽高与最小宽高一律取「默认值与工作区的较小者」，并显式 `center: true` 居中；任何分辨率/缩放下窗口完整落屏。补 5 条单元测试（大屏不变、200% 小屏全夹取、单轴溢出、当前主屏 1440x860 情形、退化工作区兜底）。
 - **本地 miniredis TTL 永不过期，登录限流累计后永久 429**：miniredis 的逻辑时钟不会自己走，`EXPIRE`/`SET EX` 设下的 TTL 从不衰减，Sub2API 登录限流计数器（`rate_limit:auth-login:<ip>`）只增不减，超过上限后本机所有登录被永久 429（fail-close）。仅影响本地自测环境，生产用真实 Redis 不受影响。
   - 修复：`tools/miniredis-server` 启动一个后台 goroutine，每秒按真实流逝时间 `FastForward` 推进逻辑时钟（该方法内部持 miniredis 全局锁，与命令处理互斥，并发安全）。实测 `SET ... EX 2` 的键 3 秒后过期消失、TTL 随时间递减。
 - **积分页按日/按模型统计恒为空**：companion `userUsageTrend`/`userUsageModels` 解包 Sub2API 仪表板响应时只处理「裸数组 / `{items:[...]}`」两种形态，而 Sub2API v0.1.175 实际把数据包在 panel envelope `data` 下的具名字段里（`data.trend` / `data.models`），解包得 `undefined` 后被 `?? []` 吞掉，导致 `/api/client/points/summary` 的 `daily`、`models` 恒为空数组（`currentPoints`/`periodUsage`/`periodRequests` 不受影响）。

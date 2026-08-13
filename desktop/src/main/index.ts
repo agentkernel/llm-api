@@ -1,16 +1,17 @@
-import { app, BrowserWindow, nativeTheme, shell } from "electron";
+import { app, BrowserWindow, nativeTheme, screen, shell } from "electron";
 import { join } from "node:path";
 import { registerIpcHandlers } from "./ipc";
 import { getTheme } from "./secureStore";
+import { computeWindowBounds } from "./windowBounds";
 
 let mainWindow: BrowserWindow | null = null;
 
 function createWindow(): void {
+  // 必须在 app ready 后取 workAreaSize（DIP），窗口与最小尺寸都不得超过工作区
+  const bounds = computeWindowBounds(screen.getPrimaryDisplay().workAreaSize);
   mainWindow = new BrowserWindow({
-    width: 1080,
-    height: 720,
-    minWidth: 920,
-    minHeight: 600,
+    ...bounds,
+    center: true,
     show: false,
     autoHideMenuBar: true,
     backgroundColor: nativeTheme.shouldUseDarkColors ? "#141416" : "#f7f7f5",
