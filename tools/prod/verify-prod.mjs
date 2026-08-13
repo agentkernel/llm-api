@@ -38,7 +38,10 @@ function log(message) {
 }
 
 async function http(base, path, { method = "GET", headers = {}, body } = {}) {
-  const res = await fetch(new URL(path, base), {
+  // path 若以 / 开头会丢掉 base 的 /v1 前缀，这里统一按相对路径拼接
+  const baseUrl = base.endsWith("/") ? base : `${base}/`;
+  const rel = String(path).replace(/^\//, "");
+  const res = await fetch(new URL(rel, baseUrl), {
     method,
     headers: {
       accept: "application/json",
@@ -46,6 +49,8 @@ async function http(base, path, { method = "GET", headers = {}, body } = {}) {
       ...headers,
     },
     body: body === undefined ? undefined : JSON.stringify(body),
+    // 任何一步挂起都不允许拖死整个验收
+    signal: AbortSignal.timeout(90_000),
   });
   const text = await res.text();
   let parsed = null;
@@ -132,9 +137,9 @@ async function main() {
   check("响应含 token 用量", Number(usage.total_tokens ?? 0) > 0, JSON.stringify(usage));
 
   log("6) 扣费与用量核对");
-  // 计费为异步落账，轮询等待余额变化
+  // 余额扣减通常立刻可见；仪表板按分钟聚合。summary 走 Sub2API 用量接口，轮询间隔拉大以免 429
   let pointsAfter = pointsBefore;
-  for (let i = 0; i < 30; i += 1) {
+  for (let i = 0; i < 20; i += 1) {
     const state = await http(COMPANION, "/api/client/state", { headers: auth });
     pointsAfter = Number(state.points);
     if (pointsAfter < pointsBefore) break;
@@ -143,7 +148,16 @@ async function main() {
   const charged = pointsBefore - pointsAfter;
   check("对话产生扣费", charged > 0, `扣费=${charged.toFixed(8)}`);
 
-  const summary = await http(COMPANION, "/api/client/points/summary?days=7", { headers: auth });
+  let summary = { models: [], daily: [], periodRequests: 0, periodUsage: 0, currentPoints: pointsAfter };
+  for (let i = 0; i < 12; i += 1) {
+    await new Promise((r) => setTimeout(r, 10000));
+    try {
+      summary = await http(COMPANION, "/api/client/points/summary?days=7", { headers: auth });
+      if (Array.isArray(summary.models) && summary.models.length > 0) break;
+    } catch (error) {
+      log(`用量统计暂不可用: ${error.message.slice(0, 80)}`);
+    }
+  }
   check("积分明细按模型非空", Array.isArray(summary.models) && summary.models.length > 0, JSON.stringify(summary.models).slice(0, 200));
   check("积分明细按日非空", Array.isArray(summary.daily) && summary.daily.length > 0, JSON.stringify(summary.daily).slice(0, 200));
   check("统计请求数为 1", Number(summary.periodRequests) === 1, `periodRequests=${summary.periodRequests}`);

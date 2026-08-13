@@ -15,6 +15,12 @@
 
 ### 修复
 
+- **积分统计在东八区凌晨恒为空（生产部署验收发现）**：`pointsSummary` 用 `toISOString()` 取 UTC 日期作为 `start_date`/`end_date`，而查询同时带 `timezone=Asia/Shanghai`——北京时间 00:00–08:00 期间 UTC 日期仍是前一天，`end_date` 把"今天"的用量整体排除，表现为扣费正常但按日/按模型统计、periodRequests 全空。此前本地验收均在白天执行，从未跨过该边界。修复：新增 `dateStringInTimeZone`（`Intl.DateTimeFormat` 按请求时区取日历日，非法时区回退 UTC），补 4 条单元测试锁定东八区凌晨、白天一致性、西向时区与非法时区回退。
+- **companion 镜像无法构建**：Dockerfile 缺 `COPY scripts`，而 `npm run build` 会调用 `scripts/copy-migrations.mjs`，Docker 构建必失败（此前 CI 只在完整 checkout 里跑 build，未覆盖镜像构建路径）。同时补构建参数（`NPM_CONFIG_REGISTRY`/构建期代理，运行层清空）与 `NODE_OPTIONS` 低内存参数。
+- **`ESCROW_USER_ID` 置空导致 companion 拒绝启动**：compose 把未设置的变量渲染成空字符串，`z.coerce.number()` 把空串转成 0 后校验失败。现将空串视为未配置（购买功能关闭、其余功能正常），与部署文档"初始化后回填"的流程一致。
+- **生产编排两处启动失败**：postgres:18-alpine 的数据目录已从 `/var/lib/postgresql/data` 迁移到 `/var/lib/postgresql`（挂旧路径会拒绝启动）；Caddy 的 `host` matcher 传空字符串会报 "module value cannot be null"，未配域名时改用 `*.invalid` 占位并走兜底反代。
+- **生产验收脚本健壮性**：所有请求加 90s 超时（此前一次 fetch 挂起拖死整个验收）；`GATEWAY_URL` 带 `/v1` 路径时的 URL 拼接修正；用量统计按 10s 间隔轮询以等待仪表板聚合（1 分钟粒度）并容忍 Sub2API 用户接口限流。
+
 - **验收报告"DeepSeek 回复来自 ChatGPT 风格上游"排查：误路由不成立；真问题是 V4 模型计费未走渠道定价**：取证（`usage_logs` 全量 + Sub2API 访问日志 + 假上游留痕）显示所有 `deepseek-*` 请求（含旧别名）自始至终都落在真实 DeepSeek 账号（account 2，`upstream_response_model=deepseek-v4-*`），假上游从未收到过 deepseek 请求。源码级确认：账号 `model_mapping` 非空即白名单（`Account.IsModelSupported`，粘性/负载均衡/failover 全路径生效），两账号白名单键集互斥（gpt-* 6 个 vs deepseek 4 个），deepseek→账号 2、gpt→账号 1 本就是确定性的；"ChatGPT 风格"系 DeepSeek 模型自身回答风格/自述倾向所致。
   - 真问题（配置修复，不在代码库内，记录备查）：渠道 1（workbuddy-deepseek-pricing）`model_pricing.models` 只含退役别名 `deepseek-chat`/`deepseek-reasoner`，新目录 id `deepseek-v4-flash`/`deepseek-v4-pro` 计费回退到全局价格表（flash 输入 1.4e-7 vs 渠道价 2.8e-7），同一上游模型因请求别名不同计价不一致。已经管理 API 把两个 V4 id 加入该渠道定价条目（价格不变：输入 2.8e-7 / 输出 4.2e-7 / cache read 2.8e-8 / cache write 0），更新后热生效。
   - 代码侧：`tools/fake-openai` 此前不记录收到的请求，`fake-openai.log` 无法作为误路由取证依据；现每个请求落一行 `时间 方法 路径 model=<id> status=<code>`，出现 `model=deepseek-*` 即误路由铁证。

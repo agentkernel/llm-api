@@ -29,7 +29,7 @@ services:
       POSTGRES_DB: ${SUB2API_DB_NAME:-sub2api}
       TZ: ${TZ:-Asia/Shanghai}
     volumes:
-      - sub2api-pgdata:/var/lib/postgresql/data
+      - sub2api-pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
@@ -49,7 +49,7 @@ services:
       POSTGRES_DB: ${COMPANION_DB_NAME:-companion}
       TZ: ${TZ:-Asia/Shanghai}
     volumes:
-      - companion-pgdata:/var/lib/postgresql/data
+      - companion-pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
@@ -91,6 +91,10 @@ services:
     build:
       context: ${SUB2API_BUILD_CONTEXT:-../.sub2api-src}
       dockerfile: Dockerfile
+      args:
+        NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-}
+        GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}
+        GOSUMDB: ${GOSUMDB:-sum.golang.google.cn}
     image: ${SUB2API_IMAGE:-wb-sub2api:v0.1.175-workbuddy}
     container_name: wb-sub2api
     restart: unless-stopped
@@ -145,6 +149,11 @@ services:
     build:
       context: ../companion
       dockerfile: Dockerfile
+      args:
+        NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-}
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${BUILD_NO_PROXY:-localhost,127.0.0.1}
     image: ${COMPANION_IMAGE:-wb-companion:0.1.0}
     container_name: wb-companion
     restart: unless-stopped
@@ -195,8 +204,9 @@ services:
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       # 域名与 TLS 上线后改这两个变量即可（留空表示仅按 IP 访问）
-      SUB2API_DOMAIN: ${SUB2API_DOMAIN:-}
-      COMPANION_DOMAIN: ${COMPANION_DOMAIN:-}
+      # 未配域名时用占位 host，Caddy 走兜底反代；切勿传空字符串（host matcher 会变成 null）
+      SUB2API_DOMAIN: ${SUB2API_DOMAIN:-sub2api.invalid}
+      COMPANION_DOMAIN: ${COMPANION_DOMAIN:-companion.invalid}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

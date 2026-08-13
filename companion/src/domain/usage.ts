@@ -20,8 +20,24 @@ export interface PointsSummary {
   rangeDays: number;
 }
 
-function dateString(date: Date): string {
-  return date.toISOString().slice(0, 10);
+/**
+ * 按目标时区取日历日（YYYY-MM-DD）。
+ * 不能用 toISOString()：它取的是 UTC 日期，在东八区 00:00–08:00 会落到前一天，
+ * 导致 end_date 把“今天”的用量整体排除（统计恒空、扣费却正常）。
+ */
+export function dateStringInTimeZone(date: Date, timezone: string): string {
+  try {
+    // en-CA 的短日期格式即 YYYY-MM-DD
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(date);
+  } catch {
+    // 非法时区名回退 UTC，交由 Sub2API 侧再校验
+    return date.toISOString().slice(0, 10);
+  }
 }
 
 /** 员工积分页数据：当前积分 + 时段消耗 + 按日/按模型统计。 */
@@ -34,8 +50,8 @@ export async function pointsSummary(
   const end = new Date();
   const start = new Date(end.getTime() - (rangeDays - 1) * 24 * 60 * 60 * 1000);
   const query = {
-    startDate: dateString(start),
-    endDate: dateString(end),
+    startDate: dateStringInTimeZone(start, timezone),
+    endDate: dateStringInTimeZone(end, timezone),
     timezone,
   };
 

@@ -27,8 +27,11 @@ const envSchema = z.object({
     .string()
     .regex(/^[0-9a-fA-F]{64}$/, "ENVELOPE_MASTER_KEY_HEX must be 32 bytes hex"),
 
-  // 托管支付订单的 escrow 用户（由 CLI escrow:init 创建后回填）
-  ESCROW_USER_ID: z.coerce.number().int().positive().optional(),
+  // 托管支付订单的 escrow 用户（由 CLI escrow:init 创建后回填；空字符串视为未配置）
+  ESCROW_USER_ID: z.preprocess(
+    (value) => (value === "" || value === undefined ? undefined : value),
+    z.coerce.number().int().positive().optional(),
+  ),
 
   // 隐藏用户邮箱域（内部占位，不需要真实收信）
   HIDDEN_USER_EMAIL_DOMAIN: z.string().default("wb-device.internal"),
