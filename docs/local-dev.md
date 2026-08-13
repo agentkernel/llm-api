@@ -9,7 +9,7 @@
 | Node.js | 22.x | 已装 |
 | Go | 1.26.5 | 便携版解压到 `D:\toolchains\go1.26.5`（`go.dev/dl`） |
 | PostgreSQL | 17.7 | 便携 zip 解压到 `D:\toolchains\pg17`（EnterpriseDB binaries） |
-| Redis | miniredis | `tools/miniredis-server`（Go 编译，纯进程内，免安装） |
+| Redis | miniredis | `tools/miniredis-server`（Go 编译，纯进程内，免安装；每秒按真实时间推进逻辑时钟，TTL 正常过期） |
 | 假 OpenAI 上游 | - | `tools/fake-openai/server.mjs` |
 | 假 EasyPay 上游 | - | `tools/fake-easypay/server.mjs` |
 

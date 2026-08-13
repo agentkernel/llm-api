@@ -4,6 +4,8 @@
 
 ### 修复
 
+- **本地 miniredis TTL 永不过期，登录限流累计后永久 429**：miniredis 的逻辑时钟不会自己走，`EXPIRE`/`SET EX` 设下的 TTL 从不衰减，Sub2API 登录限流计数器（`rate_limit:auth-login:<ip>`）只增不减，超过上限后本机所有登录被永久 429（fail-close）。仅影响本地自测环境，生产用真实 Redis 不受影响。
+  - 修复：`tools/miniredis-server` 启动一个后台 goroutine，每秒按真实流逝时间 `FastForward` 推进逻辑时钟（该方法内部持 miniredis 全局锁，与命令处理互斥，并发安全）。实测 `SET ... EX 2` 的键 3 秒后过期消失、TTL 随时间递减。
 - **积分页按日/按模型统计恒为空**：companion `userUsageTrend`/`userUsageModels` 解包 Sub2API 仪表板响应时只处理「裸数组 / `{items:[...]}`」两种形态，而 Sub2API v0.1.175 实际把数据包在 panel envelope `data` 下的具名字段里（`data.trend` / `data.models`），解包得 `undefined` 后被 `?? []` 吞掉，导致 `/api/client/points/summary` 的 `daily`、`models` 恒为空数组（`currentPoints`/`periodUsage`/`periodRequests` 不受影响）。
   - 修复：新增 `unwrapDashboardList` 按具名字段解包（兼容直接返回数组的形态），并补单元测试锁定 `data.trend`/`data.models` 形态防回归。
   - e2e：主流程对 points summary 的断言由「是数组」加强为「连通测试之后 models/daily 非空」；目录相关断言放宽为「包含 6 个 e2e 基准模型」，以容忍验收环境额外适配的真实模型（如 `deepseek-*`）。
