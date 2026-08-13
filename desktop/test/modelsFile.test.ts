@@ -78,6 +78,29 @@ describe("validateEntries", () => {
       ).not.toThrow();
     }
   });
+
+  it("accepts the DeepSeek V4 catalog entry shape written by applyModels", () => {
+    // 与 companion 目录 deepseek-v4-* 条目经 toModelEntry 写出的字段一一对应
+    const deepseekV4: WorkbuddyModelEntry = {
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      vendor: "DeepSeek",
+      url: "http://127.0.0.1:18080/v1",
+      apiKey: "sk-test",
+      maxInputTokens: 1_000_000,
+      maxOutputTokens: 384_000,
+      supportsToolCall: true,
+      supportsImages: false,
+      supportsReasoning: true,
+      useCustomProtocol: false,
+      reasoning: {
+        defaultEffort: "high",
+        supportedEfforts: ["high", "xhigh"],
+        canDisableThinking: true,
+      },
+    };
+    expect(() => validateEntries([deepseekV4])).not.toThrow();
+  });
 });
 
 describe("applyConfig", () => {
