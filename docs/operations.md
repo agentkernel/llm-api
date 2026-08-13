@@ -69,9 +69,25 @@ npm run cli -- orders:repair --out-trade-no <编号>      # 已支付未兑换�
 - **托管订单并发**：所有购买订单挂在同一 escrow 用户名下，务必调大 `max_pending_orders`（如 500）、`daily_limit=0`（不限），否则并发购买会被误限流。
 - `WB_SERVICE_API_KEY` 必须与 companion 一致；未配置时补丁的服务间路由不注册，购买功能不可用。
 
+## 网页管理台（管理员查看计费）
+
+Sub2API 自带网页管理台，与 API 同端口：浏览器打开 `http://<sub2api 地址>/`（本地自测环境为 `http://127.0.0.1:18080/`），用管理员**邮箱 + 密码**登录（即部署时 `ADMIN_EMAIL` / `ADMIN_PASSWORD` 指定的账号；本地为 `admin@wb.local`）。二进制需带前端构建，见 [local-dev.md](local-dev.md)「构建带管理台的 Sub2API」；官方 Dockerfile 镜像默认自带。
+
+计费相关页面（左侧菜单，按实测版本 v0.1.175）：
+
+| 菜单 | 路由 | 内容 |
+| --- | --- | --- |
+| 用户管理 | `/admin/users` | 全部用户及**余额**列（含设备隐藏用户与 escrow 托管用户），可搜索/编辑/禁用 |
+| 订单管理 → 支付概览 | `/admin/orders/dashboard` | 今日/累计收入、订单数、平均金额、每日收入趋势、支付方式分布、Top 用户 |
+| 订单管理 → 订单管理 | `/admin/orders` | 支付订单列表：订单号、用户、实付、支付方式、状态（含补丁新增的 `PAID_PENDING_REDEEM`），支持查看详情/退款 |
+| 订单管理 → 订阅套餐 | `/admin/orders/plans` | 套餐（plan）管理 |
+| 使用记录 | `/admin/usage` | 请求数、Token 量、消费金额（成本/标准价）、模型与端点分布、按小时趋势、用量明细与用户排行 |
+
+SPA 深链（如直接打开 `/admin/orders`）由服务端统一返回前端 HTML，属正常行为。管理台登录用的是邮箱+密码换 JWT（`/api/v1/auth/login`），与脚本用的 Admin Key（`x-api-key`）互不影响。
+
 ## 监控与巡检建议
 
-- Sub2API `/api/v1/admin/payment/dashboard` 看支付概况；`payment_audit_logs` 表含 `WB_HELD_PENDING_REDEEM`/`WB_FULFILLED` 审计。
+- Sub2API `/api/v1/admin/payment/dashboard` 看支付概况（对应管理台「订单管理 → 支付概览」页面）；`payment_audit_logs` 表含 `WB_HELD_PENDING_REDEEM`/`WB_FULFILLED` 审计。
 - companion `audit_events` 表记录设备注册/恢复、兑换、购买入账、迁移、CLI 操作。
 - 关注长期停留在 `paid_pending_redeem` 的订单（员工已付款未确认），必要时提醒或 `orders:repair`。
 

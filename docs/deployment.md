@@ -21,6 +21,8 @@ cd sub2api                  # workbuddy-patch 分支
 docker build -t sub2api:wb-v0.1.175 -f Dockerfile .
 ```
 
+生产镜像**自带网页管理台**：上游 `Dockerfile` 本身就是多阶段构建——stage 1 用 pnpm 构建前端（Vite 产物直接输出到 `backend/internal/web/dist`），stage 2 以 `go build -tags embed` 把 dist 嵌入二进制。因此 `docker build` 出的镜像访问根路径 `/` 即管理台，无需额外步骤。只有绕过 Dockerfile 手工 `go build`（不加 `-tags embed`）时才会得到无前端的纯 API 二进制（本地自测曾如此，见 [local-dev.md](local-dev.md) 的「构建带管理台的 Sub2API」）。
+
 新增环境变量：
 
 | 变量 | 说明 |

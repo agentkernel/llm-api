@@ -38,6 +38,30 @@ cd D:\workbuddy-model-assistant\sub2api\backend; $env:GOFLAGS="-mod=mod"; go bui
 
 > Windows 便携 Go 首次编译若报「paging file is too small」，用 `-p 2` 或 `GOMAXPROCS=1 GOGC=40` 降并发即可。
 
+> 上面这条 `go build` **不带 `-tags embed`**，产出的是纯 API 二进制，访问 `http://127.0.0.1:18080/` 会 404（`Frontend not embedded`）。需要网页管理台时按下节构建。
+
+## 构建带管理台的 Sub2API
+
+上游前端（`sub2api/frontend`，Vue3 + Vite + pnpm）的 Vite `outDir` 直接指向 `../backend/internal/web/dist`；Go 侧 `backend/internal/web/embed_on.go` 以 `//go:build embed` + `//go:embed all:dist` 嵌入该目录，编译时加 `-tags embed` 即生效（不加该标签走 `embed_off.go` 的 404 stub）。
+
+```powershell
+# 1) 构建前端（一次安装依赖，之后只需 run build；本机内存紧张时限制并发与堆大小）
+cd D:\workbuddy-model-assistant\sub2api\frontend
+$env:NODE_OPTIONS = '--max-old-space-size=2048'
+pnpm install --frozen-lockfile --network-concurrency=2 --child-concurrency=1
+pnpm run build          # vue-tsc 类型检查 + vite build，产物直接写入 backend\internal\web\dist
+
+# 2) 带 embed 标签重编译（dist 必须已存在，否则 go:embed 报错）
+cd D:\workbuddy-model-assistant\sub2api\backend
+$env:PATH = "D:\toolchains\go1.26.5\bin;" + $env:PATH
+$env:GOMAXPROCS = '1'; $env:GOGC = '40'; $env:GOFLAGS = '-mod=mod'; $env:CGO_ENABLED = '0'
+go build -p 2 -tags embed -o wb-sub2api-server.exe ./cmd/server
+```
+
+- 前端 API 调用走同源相对路径（管理台与 API 同为 18080 端口），无需配置 base URL。
+- 替换运行中的实例：旧 exe 被进程锁定，先编译到新文件名，`Stop-Process` 停旧进程后改名替换，再用 `.local\start-sub2api.ps1` 启动。
+- 管理台入口与页面说明见 [运维手册](operations.md)。
+
 ## 启动顺序
 
 ```powershell

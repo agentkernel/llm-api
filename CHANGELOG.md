@@ -2,6 +2,12 @@
 
 ## 未发布
 
+### 功能
+
+- **本地 Sub2API 补丁版启用网页管理台**：此前本地二进制按 `docs/local-dev.md` 用 `go build`（不带 `-tags embed`）编译，上游 `embed_off.go` 的 stub 使根路径 404「Frontend not embedded」。现按上游机制补齐：`pnpm build` 前端（Vite 产物直接输出到 `backend/internal/web/dist`）后以 `-tags embed` 重编译（二进制 145.6MB → 151.1MB），管理员可在 `http://127.0.0.1:18080/` 用邮箱+密码登录管理台查看计费（用户余额 / 支付概览 / 订单列表——含补丁 `PAID_PENDING_REDEEM` 状态 / 使用记录）。未改动任何 backend 源码（嵌入走上游自带 build tag），`workbuddy-patch.diff` 无需再生成。
+  - 实测验证：登录页与 4 个计费页面无头浏览器截图渲染正常；JWT 登录、`/api/v1/admin/{users,usage/stats,payment/dashboard,payment/orders}` 数据正常；Admin Key（`x-api-key`）与补丁服务间路由（`x-service-key`）不受影响；companion `/healthz` 正常。
+  - 文档：local-dev.md 增「构建带管理台的 Sub2API」（含低内存参数）；deployment.md 说明官方 Dockerfile 镜像默认自带前端；operations.md 增「网页管理台（管理员查看计费）」章节（入口、登录方式、各页面菜单与路由）。
+
 ### 修复
 
 - **验收报告"DeepSeek 回复来自 ChatGPT 风格上游"排查：误路由不成立；真问题是 V4 模型计费未走渠道定价**：取证（`usage_logs` 全量 + Sub2API 访问日志 + 假上游留痕）显示所有 `deepseek-*` 请求（含旧别名）自始至终都落在真实 DeepSeek 账号（account 2，`upstream_response_model=deepseek-v4-*`），假上游从未收到过 deepseek 请求。源码级确认：账号 `model_mapping` 非空即白名单（`Account.IsModelSupported`，粘性/负载均衡/failover 全路径生效），两账号白名单键集互斥（gpt-* 6 个 vs deepseek 4 个），deepseek→账号 2、gpt→账号 1 本就是确定性的；"ChatGPT 风格"系 DeepSeek 模型自身回答风格/自述倾向所致。
