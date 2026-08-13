@@ -1,0 +1,226 @@
+# WorkBuddy 模型配置助手 · 生产编排（单机 Docker Compose）
+#
+# 使用方式见 ../docs/deployment.md「Linux + Docker 生产部署」。
+# 所有密钥来自同目录 .env（chmod 600，不进 git）；本文件不含任何真实密钥。
+#
+#   sub2api            推理网关 + 面板 + 网页管理台（私有补丁镜像，自带前端）
+#   companion          业务服务（设备/兑换/购买/目录）
+#   postgres-sub2api   Sub2API 专用库
+#   postgres-companion companion 专用库
+#   redis              Sub2API 缓存与限流
+#   caddy              反向代理（按域名分流，为 TLS 上线预留）
+
+name: wb-prod
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
+
+services:
+  postgres-sub2api:
+    image: postgres:18-alpine
+    container_name: wb-postgres-sub2api
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${SUB2API_DB_USER:?required}
+      POSTGRES_PASSWORD: ${SUB2API_DB_PASSWORD:?required}
+      POSTGRES_DB: ${SUB2API_DB_NAME:-sub2api}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - sub2api-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks: [wb-internal]
+    logging: *default-logging
+
+  postgres-companion:
+    image: postgres:18-alpine
+    container_name: wb-postgres-companion
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${COMPANION_DB_USER:?required}
+      POSTGRES_PASSWORD: ${COMPANION_DB_PASSWORD:?required}
+      POSTGRES_DB: ${COMPANION_DB_NAME:-companion}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - companion-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks: [wb-internal]
+    logging: *default-logging
+
+  redis:
+    image: redis:8-alpine
+    container_name: wb-redis
+    restart: unless-stopped
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--requirepass",
+        "${REDIS_PASSWORD:?required}",
+      ]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      TZ: ${TZ:-Asia/Shanghai}
+    networks: [wb-internal]
+    logging: *default-logging
+
+  sub2api:
+    # 私有补丁版：上游 v0.1.175 + sub2api-patch/workbuddy-patch.diff。
+    # 构建上下文由 SUB2API_BUILD_CONTEXT 指向已打补丁的源码树（见部署文档）。
+    build:
+      context: ${SUB2API_BUILD_CONTEXT:-../.sub2api-src}
+      dockerfile: Dockerfile
+    image: ${SUB2API_IMAGE:-wb-sub2api:v0.1.175-workbuddy}
+    container_name: wb-sub2api
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "${SUB2API_BIND:-0.0.0.0}:${SUB2API_HOST_PORT:-18080}:8080"
+    environment:
+      AUTO_SETUP: "true"
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: "8080"
+      SERVER_MODE: release
+      RUN_MODE: standard
+      TZ: ${TZ:-Asia/Shanghai}
+      DATABASE_HOST: postgres-sub2api
+      DATABASE_PORT: "5432"
+      DATABASE_USER: ${SUB2API_DB_USER:?required}
+      DATABASE_PASSWORD: ${SUB2API_DB_PASSWORD:?required}
+      DATABASE_DBNAME: ${SUB2API_DB_NAME:-sub2api}
+      DATABASE_SSLMODE: disable
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      REDIS_DB: "0"
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?required}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?required}
+      JWT_SECRET: ${JWT_SECRET:?required}
+      JWT_EXPIRE_HOUR: "24"
+      TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:?required}
+      # 补丁：服务间支付接口密钥；未设置时补丁路由不注册
+      WB_SERVICE_API_KEY: ${WB_SERVICE_API_KEY:?required}
+      PAYMENT_RESUME_SIGNING_KEY: ${PAYMENT_RESUME_SIGNING_KEY:?required}
+      # 上游账号与定价源允许私网地址（同机 companion 回调）
+      SECURITY_URL_ALLOWLIST_ENABLED: "false"
+    volumes:
+      - sub2api-data:/app/data
+    depends_on:
+      postgres-sub2api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "5", "-O", "/dev/null", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks: [wb-internal]
+    logging: *default-logging
+
+  companion:
+    build:
+      context: ../companion
+      dockerfile: Dockerfile
+    image: ${COMPANION_IMAGE:-wb-companion:0.1.0}
+    container_name: wb-companion
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "${COMPANION_BIND:-0.0.0.0}:${COMPANION_HOST_PORT:-8720}:8720"
+    environment:
+      NODE_ENV: production
+      PORT: "8720"
+      HOST: 0.0.0.0
+      TZ: ${TZ:-Asia/Shanghai}
+      DATABASE_URL: postgres://${COMPANION_DB_USER}:${COMPANION_DB_PASSWORD}@postgres-companion:5432/${COMPANION_DB_NAME:-companion}
+      # 容器网络内访问面板；GATEWAY_URL 必须是桌面端可达的对外地址（写进 models.json）
+      SUB2API_BASE_URL: http://sub2api:8080
+      GATEWAY_URL: ${GATEWAY_URL:?required}
+      SUB2API_ADMIN_KEY: ${SUB2API_ADMIN_KEY:?required}
+      WB_SERVICE_API_KEY: ${WB_SERVICE_API_KEY:?required}
+      DEVICE_HMAC_SECRET: ${DEVICE_HMAC_SECRET:?required}
+      ENVELOPE_MASTER_KEY_HEX: ${ENVELOPE_MASTER_KEY_HEX:?required}
+      ESCROW_USER_ID: ${ESCROW_USER_ID:-}
+      HIDDEN_USER_EMAIL_DOMAIN: ${HIDDEN_USER_EMAIL_DOMAIN:-wb-device.internal}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-10}
+    volumes:
+      # 模型能力目录，供 catalog:import 读取（只读）
+      - ./catalog.prod.json:/app/catalog.json:ro
+    depends_on:
+      postgres-companion:
+        condition: service_healthy
+      sub2api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8720/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks: [wb-internal]
+    logging: *default-logging
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: wb-caddy
+    restart: unless-stopped
+    ports:
+      - "${CADDY_HTTP_PORT:-80}:80"
+      - "${CADDY_HTTPS_PORT:-443}:443"
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      # 域名与 TLS 上线后改这两个变量即可（留空表示仅按 IP 访问）
+      SUB2API_DOMAIN: ${SUB2API_DOMAIN:-}
+      COMPANION_DOMAIN: ${COMPANION_DOMAIN:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - sub2api
+      - companion
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "5", "-O", "/dev/null", "http://127.0.0.1:80/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    networks: [wb-internal]
+    logging: *default-logging
+
+networks:
+  wb-internal:
+    driver: bridge
+
+volumes:
+  sub2api-pgdata:
+  companion-pgdata:
+  redis-data:
+  sub2api-data:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,36 @@
+[
+  {
+    "id": "deepseek-v4-flash",
+    "name": "DeepSeek V4 Flash",
+    "vendor": "DeepSeek",
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 393216,
+    "supportsToolCall": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "useCustomProtocol": false,
+    "reasoning": {
+      "defaultEffort": "high",
+      "supportedEfforts": ["high", "xhigh"],
+      "canDisableThinking": true
+    },
+    "sortOrder": 1
+  },
+  {
+    "id": "deepseek-v4-pro",
+    "name": "DeepSeek V4 Pro",
+    "vendor": "DeepSeek",
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 393216,
+    "supportsToolCall": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "useCustomProtocol": false,
+    "reasoning": {
+      "defaultEffort": "high",
+      "supportedEfforts": ["high", "xhigh"],
+      "canDisableThinking": true
+    },
+    "sortOrder": 2
+  }
+]

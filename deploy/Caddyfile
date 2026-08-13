@@ -1,0 +1,29 @@
+# WorkBuddy 生产反向代理。
+# 当前阶段无公网域名：按 IP 访问时默认进 Sub2API 管理台，
+# 设置 SUB2API_DOMAIN / COMPANION_DOMAIN 后即可按域名分流，接入 TLS 只需把
+# 站点地址从 :80 换成域名（Caddy 会自动签发证书，此时删掉 auto_https off）。
+
+{
+	admin off
+	auto_https off
+}
+
+:80 {
+	# 反代自身存活探针，供容器 healthcheck 使用
+	respond /healthz "ok" 200
+
+	@companion host {$COMPANION_DOMAIN:companion.invalid}
+	handle @companion {
+		reverse_proxy companion:8720
+	}
+
+	@sub2api host {$SUB2API_DOMAIN:sub2api.invalid}
+	handle @sub2api {
+		reverse_proxy sub2api:8080
+	}
+
+	# 兜底：直接用 IP 访问时进 Sub2API（管理台与 /v1 网关同端口）
+	handle {
+		reverse_proxy sub2api:8080
+	}
+}

@@ -4,6 +4,11 @@
 
 ### 功能
 
+- **补齐生产部署编排（Linux + Docker Compose）**：仓库此前只有两份 Dockerfile 和文字版部署说明，实际上线要手工拼装。新增 [`deploy/`](deploy)：`docker-compose.yml`（sub2api / companion / 两个独立 PostgreSQL / redis / caddy 六服务，命名卷持久化、`restart: unless-stopped`、逐服务 healthcheck 与 `depends_on: service_healthy`）、`Caddyfile`（无域名时按 IP 进管理台，配置 `SUB2API_DOMAIN`/`COMPANION_DOMAIN` 后按域名分流，TLS 上线只需去掉 `auto_https off`）、`.env.example`（全部密钥占位 + 生成命令，实际 `.env` 被 gitignore 覆盖）、`catalog.prod.json`（DeepSeek V4 两个模型的能力条目，挂载进 companion 容器）。
+  - 新增 [`tools/prod/bootstrap-sub2api-prod.mjs`](tools/prod/bootstrap-sub2api-prod.mjs)：幂等完成合规确认、Admin Key 生成、分组、上游账号（`model_mapping` 恒等映射＝模型白名单）、渠道定价（`POST /api/v1/admin/channels`，两个模型 id 同时列入）、escrow 支付并发配置（`max_pending_orders=500`、`daily_limit=0`）；密钥只写入 `--out` 指定的 0600 文件，stdout 全程掩码。
+  - 新增 [`tools/prod/verify-prod.mjs`](tools/prod/verify-prod.mjs)：纯 HTTP 的生产验收（健康检查 → 设备注册 → 兑换激活 → 目录/网关模型数一致 → 真实上游对话 → 余额差额与用量统计 8 位小数核对）。
+  - 文档：deployment.md 增「单机 Docker Compose 生产部署」全流程（含 companion 生产镜像无 tsx、CLI 走 `node dist/cli/index.js` 这一实操要点），并修正桌面端发布章节——生产地址由 `WB_COMPANION_URL_PROD` 构建期注入，不再需要改源码。
+
 - **本地 Sub2API 补丁版启用网页管理台**：此前本地二进制按 `docs/local-dev.md` 用 `go build`（不带 `-tags embed`）编译，上游 `embed_off.go` 的 stub 使根路径 404「Frontend not embedded」。现按上游机制补齐：`pnpm build` 前端（Vite 产物直接输出到 `backend/internal/web/dist`）后以 `-tags embed` 重编译（二进制 145.6MB → 151.1MB），管理员可在 `http://127.0.0.1:18080/` 用邮箱+密码登录管理台查看计费（用户余额 / 支付概览 / 订单列表——含补丁 `PAID_PENDING_REDEEM` 状态 / 使用记录）。未改动任何 backend 源码（嵌入走上游自带 build tag），`workbuddy-patch.diff` 无需再生成。
   - 实测验证：登录页与 4 个计费页面无头浏览器截图渲染正常；JWT 登录、`/api/v1/admin/{users,usage/stats,payment/dashboard,payment/orders}` 数据正常；Admin Key（`x-api-key`）与补丁服务间路由（`x-service-key`）不受影响；companion `/healthz` 正常。
   - 文档：local-dev.md 增「构建带管理台的 Sub2API」（含低内存参数）；deployment.md 说明官方 Dockerfile 镜像默认自带前端；operations.md 增「网页管理台（管理员查看计费）」章节（入口、登录方式、各页面菜单与路由）。
