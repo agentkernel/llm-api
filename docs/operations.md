@@ -20,7 +20,13 @@ npm run cli -- catalog:list
 
 `catalog.json` 每项字段与 WorkBuddy `models.json` 对齐，但**不含 apiKey/url**（由客户端注入）。effort 合法值 `minimal/low/medium/high/xhigh/max`，summary `auto/always/never`，非法值会被拒绝。
 
-上线新模型流程：先在 Sub2API 给分组的账号加模型映射（使 `/v1/models` 返回），再 `catalog:import` 补该模型能力；两者齐备后员工端才可勾选。
+上线新模型流程：
+
+1. 在 Sub2API 给目标上游账号的 `model_mapping` 加该模型 id（使 `/v1/models` 返回）。
+2. 若分组配了渠道（channel）自定义定价：同步把新模型 id 加进该渠道 `model_pricing.models`，否则该模型计费回退全局价格表，会出现同一上游模型因别名不同而计价不一致。
+3. `catalog:import` 补该模型能力；三者齐备后员工端才可勾选、计费口径才正确。
+
+**多上游账号的模型隔离（重要）**：`model_mapping` 非空时即该账号的模型白名单（`Account.IsModelSupported`，粘性会话/负载均衡/failover 全部调度路径生效）；映射留空的 openai 平台 API Key 账号会"允许所有模型"。因此同一分组挂多个上游账号（如 GPT 与 DeepSeek 各一）时，各账号的 `model_mapping` 键集必须**全部非空且互斥**，这是该版本 openai 平台唯一的模型级路由隔离手段（分组级 `model_routing` 仅接入 anthropic 平台，对 openai 分组无效）。排查误路由时以 `usage_logs.account_id`、`upstream_response_model` 与假上游请求日志为准。
 
 ## 套餐管理
 

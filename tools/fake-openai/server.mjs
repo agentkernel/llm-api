@@ -12,6 +12,14 @@ function send(res, status, obj) {
   res.end(body);
 }
 
+// 每个请求都落一行日志：误路由取证时以此为决定性证据
+// （若出现 model=deepseek-* 的行，说明请求被错误调度到本假上游）。
+function logRequest(method, path, model, status) {
+  console.log(
+    `${new Date().toISOString()} ${method} ${path} model=${model ?? "-"} status=${status}`
+  );
+}
+
 const server = createServer((req, res) => {
   let body = "";
   req.on("data", (c) => (body += c));
@@ -19,6 +27,7 @@ const server = createServer((req, res) => {
     const url = new URL(req.url, `http://localhost:${port}`);
     const path = url.pathname;
     if (req.method === "GET" && path.endsWith("/models")) {
+      logRequest(req.method, path, null, 200);
       send(res, 200, {
         object: "list",
         data: MODELS.map((id) => ({ id, object: "model", owned_by: "fake" })),
@@ -32,6 +41,7 @@ const server = createServer((req, res) => {
       } catch {
         /* ignore */
       }
+      logRequest(req.method, path, model, 200);
       send(res, 200, {
         id: `chatcmpl-fake-${Date.now()}`,
         object: "chat.completion",
@@ -55,6 +65,7 @@ const server = createServer((req, res) => {
       } catch {
         /* ignore */
       }
+      logRequest(req.method, path, model, 200);
       send(res, 200, {
         id: `resp-fake-${Date.now()}`,
         object: "response",
@@ -72,6 +83,7 @@ const server = createServer((req, res) => {
       });
       return;
     }
+    logRequest(req.method, path, null, 404);
     send(res, 404, { error: { message: `no route ${req.method} ${path}` } });
   });
 });

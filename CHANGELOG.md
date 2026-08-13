@@ -4,6 +4,11 @@
 
 ### 修复
 
+- **验收报告"DeepSeek 回复来自 ChatGPT 风格上游"排查：误路由不成立；真问题是 V4 模型计费未走渠道定价**：取证（`usage_logs` 全量 + Sub2API 访问日志 + 假上游留痕）显示所有 `deepseek-*` 请求（含旧别名）自始至终都落在真实 DeepSeek 账号（account 2，`upstream_response_model=deepseek-v4-*`），假上游从未收到过 deepseek 请求。源码级确认：账号 `model_mapping` 非空即白名单（`Account.IsModelSupported`，粘性/负载均衡/failover 全路径生效），两账号白名单键集互斥（gpt-* 6 个 vs deepseek 4 个），deepseek→账号 2、gpt→账号 1 本就是确定性的；"ChatGPT 风格"系 DeepSeek 模型自身回答风格/自述倾向所致。
+  - 真问题（配置修复，不在代码库内，记录备查）：渠道 1（workbuddy-deepseek-pricing）`model_pricing.models` 只含退役别名 `deepseek-chat`/`deepseek-reasoner`，新目录 id `deepseek-v4-flash`/`deepseek-v4-pro` 计费回退到全局价格表（flash 输入 1.4e-7 vs 渠道价 2.8e-7），同一上游模型因请求别名不同计价不一致。已经管理 API 把两个 V4 id 加入该渠道定价条目（价格不变：输入 2.8e-7 / 输出 4.2e-7 / cache read 2.8e-8 / cache write 0），更新后热生效。
+  - 代码侧：`tools/fake-openai` 此前不记录收到的请求，`fake-openai.log` 无法作为误路由取证依据；现每个请求落一行 `时间 方法 路径 model=<id> status=<code>`，出现 `model=deepseek-*` 即误路由铁证。
+  - 验证（12 次调用，max_tokens≤30）：5x `deepseek-v4-flash` + 5x `deepseek-v4-pro` 全部命中账号 2（响应含 `reasoning_content`，DeepSeek 前缀缓存自第 2 次起命中 128 token 并按 cache_read 价计费），2x `gpt-5.6` 命中账号 1 且假上游日志留痕；12 笔扣费与用户余额差额按 8 位小数精确一致，仪表板按模型统计与调用次数吻合。
+  - 运维手册（docs/operations.md）补充：上线新模型须同步渠道定价覆盖；多上游账号 `model_mapping` 必须全部非空且互斥（openai 平台唯一模型级隔离手段）。
 - **高 DPI / 小分辨率下主窗口远大于屏幕且无法缩小**：主窗口写死 `1080x720`、最小 `920x600`（DIP）。屏幕逻辑工作区小于该值时（如 2880x1800 物理分辨率配 250%+ 缩放、或远程控制切换到低分辨率虚拟屏），窗口初始即超出屏幕，且最小尺寸限制导致手动也无法缩小回屏内。
   - 修复：新增 `windowBounds.computeWindowBounds`，app ready 后取 `screen.getPrimaryDisplay().workAreaSize`，初始宽高与最小宽高一律取「默认值与工作区的较小者」，并显式 `center: true` 居中；任何分辨率/缩放下窗口完整落屏。补 5 条单元测试（大屏不变、200% 小屏全夹取、单轴溢出、当前主屏 1440x860 情形、退化工作区兜底）。
 - **DeepSeek 模型清单不对、在 WorkBuddy 中不可用**：服务端目录（`model_profiles`）此前导入的是 DeepSeek 已宣布退役的旧模型 id（`deepseek-chat`/`deepseek-reasoner`，官方公告 2026-07-24 起退役、现仅作兼容路由到 V4-Flash），且能力字段与现行模型不符（上下文 131072 vs 实际 1M、`deepseek-reasoner` 标注不支持工具调用导致 WorkBuddy 在 agent 会话中剥除 `tools`、缺 `reasoning` 配置导致思考档位交互异常）。官方 `GET /models` 实测现仅返回 `deepseek-v4-flash` 与 `deepseek-v4-pro`。
